@@ -469,6 +469,7 @@ git = (->
   }
 )!
 
+-- TODO: Implement git statusline information
 cfg.RegisterCommonOption "git", "path", ""
 cfg.RegisterCommonOption "git", "onsave", true
 cfg.RegisterCommonOption "git", "status_line", true
@@ -496,7 +497,6 @@ export init = ->
     if cmd == '' or not cmd
       app.TermMessage "#{NAME}: git not present in $PATH or set, some functionality will not work correctly"
 
-  registerCommand "git.raw", git.raw, cfg.NoComplete
   registerCommand "git.init", git.init, cfg.NoComplete
   registerCommand "git.pull", git.pull, cfg.NoComplete
   registerCommand "git.push", git.push, cfg.NoComplete
