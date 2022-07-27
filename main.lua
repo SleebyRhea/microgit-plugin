@@ -1,5 +1,5 @@
-_G.VERSION = "1.0.0"
-_G.NAME = 'gitstatus'
+VERSION = "1.0.0"
+NAME = 'gitstatus'
 local go = assert(loadstring([[  -- script: lua
   return ({
     import = function (pkg)
@@ -43,26 +43,24 @@ wordify = function(word, singular, plural)
     return number ~= 1 and plural or singular
   end
 end
-local each_line = (function()
-  str = go.import("strings")
-  return function(input, fn)
-    input = str.Replace(chomp(input), "\r\n", "\n", -1)
-    input = str.Replace(input, "\n\r", "\n", -1)
-    local lines = str.Split(input, "\n")
-    local l_count = #lines
-    local stop = false
-    local finish
-    finish = function()
-      stop = true
-    end
-    for i = 1, l_count do
-      if stop then
-        return 
-      end
-      fn(lines[i], finish)
-    end
+local each_line
+each_line = function(input, fn)
+  input = str.Replace(chomp(input), "\r\n", "\n", -1)
+  input = str.Replace(input, "\n\r", "\n", -1)
+  local lines = str.Split(input, "\n")
+  local l_count = #lines
+  local stop = false
+  local finish
+  finish = function()
+    stop = true
   end
-end)()
+  for i = 1, l_count do
+    if stop then
+      return 
+    end
+    fn(lines[i], finish)
+  end
+end
 local make_temp = (function()
   local rand = go.import("math/rand")
   local chars = 'qwertyuioasdfghjklzxcvbnm'
@@ -130,8 +128,8 @@ make_commit_pane = function(output, header, fn)
   commit_pane.Cursor.Loc.X = 0
   commit_pane.Cursor:Relocate()
   return table.insert(ACTIVE_COMMITS, {
-    buffer = commit_pane,
     callback = fn,
+    buffer = commit_pane,
     file = filepath,
     done = ready
   })

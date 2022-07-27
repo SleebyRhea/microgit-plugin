@@ -1,5 +1,5 @@
-_G.VERSION = "1.0.0"
-_G.NAME	   = 'gitstatus'
+export VERSION = "1.0.0"
+export NAME	   = 'gitstatus'
 
 -- Workaround for import being a keyword in Moonscript
 go = assert loadstring([[
@@ -50,22 +50,19 @@ wordify = (word, singular, plural) ->
     number != 1 and plural or singular
 
 --- Run a given function for each line in a string
-each_line = (->
-  str = go.import "strings"
-  return (input, fn) ->
-    input = str.Replace chomp(input), "\r\n", "\n", -1
-    input = str.Replace input, "\n\r", "\n", -1
-    lines = str.Split(input, "\n")
-    l_count = #lines
+each_line = (input, fn) ->
+  input = str.Replace chomp(input), "\r\n", "\n", -1
+  input = str.Replace input, "\n\r", "\n", -1
+  lines = str.Split(input, "\n")
+  l_count = #lines
 
-    stop = false
-    finish = -> stop = true
+  stop = false
+  finish = -> stop = true
 
-    for i = 1, l_count
-      return if stop
+  for i = 1, l_count
+    return if stop
 
-      fn lines[i], finish
-)!
+    fn lines[i], finish
 
 
 make_temp = (->
@@ -127,7 +124,6 @@ make_commit_pane = (output, header, fn) ->
 
   filepath = make_temp!
 
-  -- TODO: This is giving permission errors, find out why
   debug "Populating temporary commit file #{filepath} ..."
   iou.WriteFile filepath, output, 0x1B0 -- 0660, to account for octal
 
@@ -147,14 +143,13 @@ make_commit_pane = (output, header, fn) ->
   commit_pane.Buf\SetOptionNative "statusformatl", header
   commit_pane.Buf\SetOptionNative "scrollbar", false
   commit_pane.Buf\SetOptionNative "", false
-  --commit_pane.Buf.EventHandler\Insert buf.Loc(0, 0), output
   commit_pane.Cursor.Loc.Y = 000
   commit_pane.Cursor.Loc.X = 0
   commit_pane.Cursor\Relocate!
 
   table.insert ACTIVE_COMMITS, {
-    buffer:commit_pane,
-    callback:fn,
+    callback: fn
+    buffer: commit_pane
     file: filepath
     done: ready
   }
