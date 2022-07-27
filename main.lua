@@ -258,8 +258,7 @@ git = (function()
     end,
     checkout = (function()
       local re_valid_label = rgx.MustCompile("^[a-zA-Z-_/.]+$")
-      return function(self, argv)
-        local label = get_args(argv)
+      return function(self, label)
         if not (in_repo()) then
           return send.checkout(errors.not_a_repo)
         end
@@ -307,8 +306,7 @@ git = (function()
     end,
     branch = (function()
       local re_valid_label = rgx.MustCompile("^[a-zA-Z-_/.]+$")
-      return function(self, argv)
-        local label = get_args(argv)
+      return function(self, label)
         if not (in_repo()) then
           return send.branch(errors.not_a_repo)
         end

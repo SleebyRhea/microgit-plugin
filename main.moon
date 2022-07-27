@@ -164,21 +164,17 @@ git = (->
 
   --- Execute a git command with the provided args
   exec = (...) ->
-    -- debug "Determining git command ..."
     cmd = cfg.GetGlobalOption "git.path"
     if cmd == ""
-      -- debug "Getting command from shell ..."
       cmd, _ = shl.ExecCommand "command", "-v", "git"
       cmd = chomp cmd
       if cmd == '' or not cmd
         return "", "no git configured"
 
-    -- debug "Stat'ing #{cmd}"
     finfo, err = os.Stat cmd
     unless finfo
       return "", err.Error!
 
-    -- debug "Attempting to run #{cmd} ..."
     out, err = shl.ExecCommand cmd, ...
     return out, err
 
@@ -263,9 +259,7 @@ git = (->
     checkout: (->
       re_valid_label = rgx.MustCompile"^[a-zA-Z-_/.]+$"
 
-      return (argv) =>
-        label = get_args argv
-      
+      return (label) =>
         unless in_repo!
           return send.checkout errors.not_a_repo
 
@@ -315,9 +309,7 @@ git = (->
     branch: (->
       re_valid_label = rgx.MustCompile"^[a-zA-Z-_/.]+$"
 
-      return (argv) =>
-        label = get_args argv
-      
+      return (label) =>      
         unless in_repo!
           return send.branch errors.not_a_repo
           
