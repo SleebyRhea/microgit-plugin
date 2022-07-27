@@ -215,7 +215,7 @@ git = (->
     out, _ = exec "branch", "-al"
     branches = {}
 
-    each_line out, ->
+    each_line out, (line) ->
       debug "Attempting to match: #{line}"
       name = line\match "^%s*%*?%s*([^%s]+)"
       return unless name

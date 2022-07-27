@@ -190,7 +190,7 @@ git = (function()
   get_branches = function()
     local out, _ = exec("branch", "-al")
     local branches = { }
-    each_line(out, function()
+    each_line(out, function(line)
       debug("Attempting to match: " .. tostring(line))
       local name = line:match("^%s*%*?%s*([^%s]+)")
       if not (name) then
