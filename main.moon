@@ -414,11 +414,11 @@ git = (->
         unless in_repo!
           return send.push errors.not_a_repo
 
-        if branch
+        if branch != nil  
           unless re_valid_label\Match branch
             return send.push errors.bad_label_arg
         else
-          branch == "--all"
+          branch = "--all"
 
         push_out, _ = exec "push", branch
         send.push push_out

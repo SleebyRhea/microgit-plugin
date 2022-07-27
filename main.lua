@@ -394,12 +394,12 @@ git = (function()
         if not (in_repo()) then
           return send.push(errors.not_a_repo)
         end
-        if branch then
+        if branch ~= nil then
           if not (re_valid_label:Match(branch)) then
             return send.push(errors.bad_label_arg)
           end
         else
-          local _ = branch == "--all"
+          branch = "--all"
         end
         local push_out, _ = exec("push", branch)
         return send.push(push_out)
