@@ -1,0 +1,15 @@
+[{
+  "Name": "git-status",
+  "Description": "Provide git integration to Micro",
+  "Tags": ["vcs", "git"],
+  "Website": "https://google.com",
+  "Versions": [
+		{
+			"Version": "1.0.0",
+			"Url": "https://github.com/SleepyFugu/micro-git-status-plugin/archive/v1.0.0.zip",
+			"Require": {
+				"micro": ">=1.0.0",
+			}
+		},
+	]
+}]
