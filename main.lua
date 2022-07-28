@@ -24,7 +24,6 @@ local LOADED_COMMANDS = { }
 local BRANCH_STATUS = { }
 local BUFFER_BRANCH = { }
 cfg.RegisterCommonOption("git", "command", "")
-cfg.RegisterCommonOption("git", "statusline", true)
 cfg.RegisterCommonOption("git", "updateinfo", true)
 local errors = {
   is_a_repo = "the current directory is already a repository",
@@ -380,9 +379,6 @@ git = (function()
       debug("update_branch_status: was called with a non-buffer object!")
       return 
     end
-    if not (cfg.GetGlobalOption("git.statusline")) then
-      return 
-    end
     if not (cfg.GetGlobalOption("git.updateinfo")) then
       return 
     end
@@ -399,6 +395,9 @@ git = (function()
     end
     local branch
     debug("update_branch_status: Getting branch label ...")
+    if not (cmd.in_repo()) then
+      return 
+    end
     local out, err = cmd.exec("branch", "--show-current")
     if not (err) then
       branch = chomp(out)

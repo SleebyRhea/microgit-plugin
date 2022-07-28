@@ -30,7 +30,6 @@ BRANCH_STATUS = {}
 BUFFER_BRANCH = {}
 
 cfg.RegisterCommonOption "git", "command", ""
-cfg.RegisterCommonOption "git", "statusline", true
 cfg.RegisterCommonOption "git", "updateinfo", true
 
 errors =
@@ -359,7 +358,6 @@ git = (->
       debug "update_branch_status: was called with a non-buffer object!"
       return
     
-    return unless cfg.GetGlobalOption "git.statusline"
     return unless cfg.GetGlobalOption "git.updateinfo"
     return unless (not @Type.Scratch) and (@Path != '')
     
@@ -372,6 +370,8 @@ git = (->
     local branch
 
     debug "update_branch_status: Getting branch label ..."
+
+    return unless cmd.in_repo!
     out, err = cmd.exec "branch", "--show-current"
     unless err
       branch = chomp out

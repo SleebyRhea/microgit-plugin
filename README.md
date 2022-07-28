@@ -12,6 +12,7 @@ Adds a number of commands to make working with git repos within Micro a more sea
   - Path to the git command that you would like to use
 
 ## Statusline
+NOTE: In order to use the statusline functions, you MUST make sure the plugin directory name is `microgit` or Micro will not register the plugin correctly.
 This plugin exposes the following functions for statusline configurations:
   - `microgit.numahead`
     - Returns the number of commits ahead of your branches origin
@@ -23,8 +24,7 @@ This plugin exposes the following functions for statusline configurations:
     - Returns the current commit short hash
   - `microgit.onbranch`
     - Returns the current panes branch (if any)
-
-NOTE: In order to use the statusline functions, you MUST make sure the plugin directory name is `microgit` or Micro will not register the plugin correctly.
+  - Example: ` $(microgit.onbranch) ↑$(microgit.numahead) ↓$(microgit.numbehind) ↓↑$(microgit.numstaged) | commit:$(microgit.oncommit)`
 
 ## Commands
   - `git.init()`
