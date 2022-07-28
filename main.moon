@@ -1,5 +1,5 @@
 export VERSION = "1.0.0"
-export NAME    = 'gitstatus'
+export NAME    = 'microgit'
 
 -- Workaround for import being a keyword in Moonscript
 go = assert loadstring([[

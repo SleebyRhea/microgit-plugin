@@ -1,5 +1,5 @@
 VERSION = "1.0.0"
-NAME = 'gitstatus'
+NAME = 'microgit'
 local go = assert(loadstring([[  -- script: lua
   return ({
     import = function (pkg)
