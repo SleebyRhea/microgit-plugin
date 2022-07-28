@@ -111,6 +111,25 @@ local send_block = (function()
     return send_pane.Cursor:Relocate()
   end
 end)()
+local make_empty_pane
+make_empty_pane = function(root, rszfn, header, fn)
+  local old_view = root:GetView()
+  local h = old_view.Height
+  local pane = root:HSplitIndex(buf.NewBuffer("", header), true)
+  pane:ResizePane(rszfn(h))
+  pane.Buf.Type.Scratch = true
+  pane.Buf.Type.Readonly = true
+  pane.Buf.Type.Syntax = false
+  pane.Buf:SetOptionNative("softwrap", true)
+  pane.Buf:SetOptionNative("ruler", false)
+  pane.Buf:SetOptionNative("autosave", false)
+  pane.Buf:SetOptionNative("statusformatr", "")
+  pane.Buf:SetOptionNative("statusformatl", header)
+  pane.Buf:SetOptionNative("scrollbar", false)
+  pane.Cursor.Loc.Y = 0
+  pane.Cursor.Loc.X = 0
+  return pane
+end
 local make_commit_pane
 make_commit_pane = function(root, output, header, fn)
   local old_view = root:GetView()
@@ -209,6 +228,44 @@ git = (function()
       local out = shl.ExecCommand(base, "-C", dir, ...)
       return out
     end
+    local exec_async
+    exec_async = function(self, ...)
+      if not (path_exists(dir)) then
+        return nil, "directory " .. tostring(dir) .. " does not exist"
+      end
+      debug("Parent directory " .. tostring(dir) .. " exists, continuing ...")
+      local base = cfg.GetGlobalOption("git.path")
+      if base == "" then
+        local _
+        base, _ = shl.ExecCommand("command", "-v", "git")
+        base = chomp(base)
+        if base == '' or not base then
+          return nil, "no git configured"
+        end
+      end
+      debug("Found valid git path: " .. tostring(base))
+      if not (path_exists(base)) then
+        return nil, err.Error()
+      end
+      debug("Running ...")
+      local resize_fn
+      resize_fn = function(h)
+        return h - (h / 3)
+      end
+      local pane = make_empty_pane(self, resize_fn, "git-" .. tostring(cmd))
+      local on_emit
+      on_emit = function(_str, _)
+        pane.Buf:Write(_str)
+      end
+      local on_exit
+      on_exit = function(_, _)
+        pane.Buf:Write("\n[command has completed, ctrl-q to exit]\n")
+      end
+      shl.JobSpawn(base, {
+        ...
+      }, on_emit, on_emit, on_exit)
+      return "", nil
+    end
     local in_repo
     in_repo = function()
       local out, _ = exec("rev-parse", "--is-inside-work-tree")
@@ -245,6 +302,7 @@ git = (function()
     return {
       new = new,
       exec = exec,
+      exec_async = exec_async,
       in_repo = in_repo,
       known_label = known_label,
       get_branches = get_branches
@@ -479,12 +537,11 @@ git = (function()
         else
           branch = "--all"
         end
-        local push_out
-        push_out, err = cmd.exec("push", branch)
+        local _
+        _, err = cmd.exec_async(self, "push", branch)
         if err then
           return send.push(err)
         end
-        return send.push(push_out)
       end
     end)(),
     pull = function(self)

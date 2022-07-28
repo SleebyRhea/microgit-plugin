@@ -25,6 +25,7 @@ regexp = go.import"regexp"
 runtime = go.import"runtime"
 
 ACTIVE_COMMITS = {}
+
 errors =
   is_a_repo: "the current directory is already a repository"
   not_a_repo: "the current directory is not a repository"
@@ -119,6 +120,26 @@ send_block = (->
     send_pane.Cursor.Loc.X = 0
     send_pane.Cursor\Relocate!
 )!
+
+
+make_empty_pane = (root, rszfn, header, fn) ->
+  old_view = root\GetView!
+  h = old_view.Height
+  pane = root\HSplitIndex(buf.NewBuffer("", header), true)
+  pane\ResizePane rszfn h
+  pane.Buf.Type.Scratch = true
+  pane.Buf.Type.Readonly = true
+  pane.Buf.Type.Syntax = false
+  pane.Buf\SetOptionNative "softwrap", true
+  pane.Buf\SetOptionNative "ruler", false
+  pane.Buf\SetOptionNative "autosave", false
+  pane.Buf\SetOptionNative "statusformatr", ""
+  pane.Buf\SetOptionNative "statusformatl", header
+  pane.Buf\SetOptionNative "scrollbar", false
+  pane.Cursor.Loc.Y = 0
+  pane.Cursor.Loc.X = 0
+  return pane
+
 
 make_commit_pane = (root, output, header, fn) ->
   old_view = root\GetView!
@@ -227,6 +248,38 @@ git = (->
       debug "Running ..."
       out = shl.ExecCommand base, "-C", dir, ...
       return out
+
+    exec_async = (...) =>
+      unless path_exists dir
+        return nil, "directory #{dir} does not exist"
+
+      debug "Parent directory #{dir} exists, continuing ..."
+      base = cfg.GetGlobalOption "git.path"
+      if base == ""
+        base, _ = shl.ExecCommand "command", "-v", "git"
+        base = chomp base
+        if base == '' or not base
+          return nil, "no git configured"
+
+      debug "Found valid git path: #{base}"
+      unless path_exists base
+        return nil, err.Error!
+
+      debug "Running ..."
+
+      resize_fn = (h) -> h - ( h / 3 )
+      pane = make_empty_pane self, resize_fn, "git-#{cmd}"
+
+      on_emit = (_str, _) ->
+        pane.Buf\Write _str
+        return
+
+      on_exit = (_, _) ->
+        pane.Buf\Write "\n[command has completed, ctrl-q to exit]\n"
+        return
+    
+      shl.JobSpawn base, {...}, on_emit, on_emit, on_exit
+      return "", nil
       
     in_repo = ->
       out, _ = exec "rev-parse", "--is-inside-work-tree"
@@ -257,7 +310,7 @@ git = (->
       out, err = exec "rev-parse", label
       return err != "" and false or chomp(out)
 
-    return { :new, :exec, :in_repo, :known_label, :get_branches }
+    return { :new, :exec, :exec_async, :in_repo, :known_label, :get_branches }
 
   --- Issue a message to the InfoBar with a neat syntax
   send = setmetatable {}, __index: (_, cmd) ->
@@ -288,7 +341,7 @@ git = (->
       out, err = cmd.exec "init"
       return send.init err if err
       send.init out
-      
+
     fetch: =>
       cmd, err = new_command @Buf.Path
       unless cmd
@@ -473,9 +526,9 @@ git = (->
         else
           branch = "--all"
 
-        push_out, err = cmd.exec "push", branch
+        _, err = cmd.exec_async self, "push", branch
         return send.push err if err
-        send.push push_out
+        return
     )!
 
     --- Pull changes from remotes into local
