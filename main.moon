@@ -163,6 +163,9 @@ bound = (n, min, max) ->
   debug "bound: got: #{n}"
   n > max and max or (n < min and min or n)
 
+-- filepath.Abs and filepath.IsAbs both exist, however, their use in Lua code
+-- here currently panics the application. Until then, we'll just have to rely
+-- on something hacky in the meantime. This is pretty gross, but it works.
 get_path_info = (->
   s = string.char os.PathSeparator
 
@@ -199,9 +202,6 @@ git = (->
   re_commit = regexp.MustCompile"^commit[\\s]+([^\\s]+).*$"
   
   new_command = (filepath) ->
-    -- filepath.Abs and filepath.IsAbs exist, however, their use in Lua code
-    -- currently panics the application. Until then, we'll just have to rely
-    -- on something hacky in the meantime.
     if type(filepath) != 'string' or filepath == ''
       debug "filepath [#{filepath}] is not a valid editor path (need string): (got: #{type filepath})"
       return nil, "Please run this in an editor pane"
