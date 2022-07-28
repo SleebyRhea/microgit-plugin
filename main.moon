@@ -133,7 +133,7 @@ make_commit_pane = (root, output, header, fn) ->
   -- makes and then dumps the output string into its buffer
   -- Follow this by setting the cursor to 0,0 to move to the top
   debug "Generating new buffer for #{filepath}"
-  commit_pane = (app.CurPane!)\HSplitIndex(buf.NewBuffer("", filepath), true)
+  commit_pane = (app.CurPane!)\HSplitIndex(buf.NewBuffer(output, filepath), true)
   commit_pane\ResizePane h - (h / 3)
   commit_pane.Buf.Type.Scratch = false
   commit_pane.Buf.Type.Readonly = false
@@ -144,8 +144,6 @@ make_commit_pane = (root, output, header, fn) ->
   commit_pane.Buf\SetOptionNative "statusformatr", ""
   commit_pane.Buf\SetOptionNative "statusformatl", header
   commit_pane.Buf\SetOptionNative "scrollbar", false
-  commit_pane.Buf\SetOptionNative "", false
-  commit_pane.Buf.EventHandler\Insert buf.Loc(0, 0), output
   commit_pane.Cursor.Loc.Y = 0
   commit_pane.Cursor.Loc.X = 0
   commit_pane.Cursor\Relocate!
@@ -206,7 +204,7 @@ git = (->
   new_command = (filepath) ->
     if type(filepath) != 'string' or filepath == ''
       debug "filepath [#{filepath}] is not a valid editor path (need string): (got: #{type filepath})"
-      return nil, "Please run this in an editor pane"
+      return nil, "Please run this in a file pane"
 
     abs, dir, name = get_path_info filepath
    
@@ -639,7 +637,7 @@ export onQuit = =>
         debug "Commit #{i} is ready, fulfilling active commit ..."
         commit.callback commit.file
       else
-        if @Buf.modified
+        if @Buf\Modified!
           -- We need to override the current YNPrompt if it exists,
           -- and then close it. This way, we can hijack the save/quit
           -- prompt and inject our own
