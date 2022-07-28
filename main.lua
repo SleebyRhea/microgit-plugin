@@ -171,7 +171,7 @@ make_commit_pane = function(root, output, header, fn)
     callback = fn,
     pane = commit_pane,
     file = filepath,
-    done = ready,
+    done = false,
     root = root
   })
 end
@@ -262,7 +262,6 @@ git = (function()
       if not (path_exists(base)) then
         return nil, err.Error()
       end
-      debug("Running ...")
       local resize_fn
       resize_fn = function(h)
         return h - (h / 3)
@@ -292,9 +291,18 @@ git = (function()
     get_branches = function()
       local out, _ = exec("branch", "-al")
       local branches = { }
+      local current = ''
       each_line(out, function(line)
         debug("Attempting to match: " .. tostring(line))
-        name = line:match("^%s*%*?%s*([^%s]+)")
+        local cur
+        cur, name = line:match("^%s*(%*?)%s*([^%s]+)")
+        if name then
+          if cur == '*' then
+            current = name
+          end
+        else
+          name = cur
+        end
         if not (name) then
           return 
         end
@@ -309,7 +317,7 @@ git = (function()
           name = name
         })
       end)
-      return branches
+      return branches, current
     end
     local known_label
     known_label = function(label)
@@ -369,7 +377,7 @@ git = (function()
     if line ~= '' then
       line = tostring(line) .. " | "
     end
-    line = tostring(line) .. tostring(branch) .. " ↑" .. tostring(ch_upstream) .. " ↓" .. tostring(ch_local) .. " ↓↑" .. tostring(staged) .. " | commit:" .. tostring(commit)
+    line = " " .. tostring(line) .. tostring(branch) .. " ↑" .. tostring(ch_upstream) .. " ↓" .. tostring(ch_local) .. " ↓↑" .. tostring(staged) .. " | commit:" .. tostring(commit)
     return line
   end
   local update_git_line
@@ -519,12 +527,8 @@ git = (function()
       if not (cmd.in_repo()) then
         return send.checkout(errors.not_a_repo)
       end
-      local branches = cmd.get_branches()
-      local current = ''
+      local branches, current = cmd.get_branches()
       local output = ''
-      if current_branch ~= '' then
-        output = output .. "\nCurrent: " .. tostring(current) .. "\n"
-      end
       output = output .. "Branches:\n"
       for _index_0 = 1, #branches do
         local branch = branches[_index_0]

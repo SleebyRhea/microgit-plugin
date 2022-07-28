@@ -185,7 +185,7 @@ make_commit_pane = (root, output, header, fn) ->
     callback: fn
     pane: commit_pane
     file: filepath
-    done: ready
+    done: false
     root: root
   }
 
@@ -277,8 +277,6 @@ git = (->
       unless path_exists base
         return nil, err.Error!
 
-      debug "Running ..."
-
       resize_fn = (h) -> h - ( h / 3 )
       pane = make_empty_pane self, resize_fn, "git-#{cmd}"
 
@@ -302,10 +300,16 @@ git = (->
     get_branches = ->
       out, _ = exec "branch", "-al"
       branches = {}
+      current = ''
 
       each_line out, (line) ->
         debug "Attempting to match: #{line}"
-        name = line\match "^%s*%*?%s*([^%s]+)"
+        cur, name = line\match "^%s*(%*?)%s*([^%s]+)"
+        if name
+          if cur == '*'
+            current = name
+        else
+          name = cur
         return unless name
 
         debug "Found branch: #{name}"
@@ -318,7 +322,7 @@ git = (->
           commit: chomp revision
           :name
 
-      return branches
+      return branches, current
 
     known_label = (label) ->
       out, err = exec "rev-parse", label
@@ -350,7 +354,7 @@ git = (->
     line = line\gsub '%$%(bind:ToggleKeyMenu%): bindings, %$%(bind:ToggleHelp%): help', ''
     if line != ''
       line = "#{line} | "
-    line = "#{line}#{branch} ↑#{ch_upstream} ↓#{ch_local} ↓↑#{staged} | commit:#{commit}"
+    line = " #{line}#{branch} ↑#{ch_upstream} ↓#{ch_local} ↓↑#{staged} | commit:#{commit}"
     return line
 
   update_git_line = (cmd) =>
@@ -488,12 +492,8 @@ git = (->
       unless cmd.in_repo!
         return send.checkout errors.not_a_repo
 
-      branches = cmd.get_branches!
-      current  = ''
+      branches, current = cmd.get_branches!
       output   = ''
-
-      if current_branch != ''
-        output ..= "\nCurrent: #{current}\n"
 
       output ..= "Branches:\n"
       for branch in *branches
