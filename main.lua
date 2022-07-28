@@ -20,13 +20,16 @@ local ioutil = go.import("ioutil")
 local regexp = go.import("regexp")
 local runtime = go.import("runtime")
 local ACTIVE_COMMITS = { }
+local LOADED_COMMANDS = { }
 local errors = {
   is_a_repo = "the current directory is already a repository",
   not_a_repo = "the current directory is not a repository",
   invalid_arg = "invalid_argument provided",
   bad_label_arg = "invalid argument, please provide a valid rev label",
   not_enough_args = "not enough arguments",
-  unknown_label = "given label is not known to this repo"
+  unknown_label = "given label is not known to this repo",
+  command_not_found = "invalid command provided (not a command)",
+  no_help = "FIXME: no help for command git."
 }
 local debug
 debug = function(m)
@@ -331,6 +334,27 @@ git = (function()
     end
   })
   return {
+    help = function(self, command)
+      if not (LOADED_COMMANDS[command]) then
+        return send.help(errors.command_not_found)
+      end
+      if not (LOADED_COMMANDS[command].help) then
+        return send.help((errors.no_help .. command))
+      end
+      local _help = LOADED_COMMANDS[command].help
+      _help = str.Replace(_help, "%pub%", "git", -1)
+      local help_out = ''
+      each_line(_help, function(line)
+        if (tostring(line)):match("^%s*$") then
+          return 
+        end
+        help_out = help_out .. ((str.TrimPrefix(line, '      ')) .. "\n")
+      end)
+      return send.help(help_out)
+    end,
+    help_help = [[      usage: %pub%.help <command>
+        Get usage informatino for a specific git command
+    ]],
     init = function(self)
       local cmd, err = new_command(self.Buf.Path)
       if not (cmd) then
@@ -785,7 +809,11 @@ registerCommand = function(name, fn, cb)
     end
     return debug("command[" .. tostring(external_name) .. "] completed")
   end
-  return cfg.MakeCommand(external_name, cmd, cb)
+  cfg.MakeCommand(external_name, cmd, cb)
+  LOADED_COMMANDS[name] = {
+    cmd = cmd,
+    help = git[name .. "_help"]
+  }
 end
 init = function()
   debug("Initializing " .. tostring(NAME))
@@ -797,6 +825,7 @@ init = function()
       app.TermMessage(tostring(NAME) .. ": git not present in $PATH or set, some functionality will not work correctly")
     end
   end
+  registerCommand("help", git.help, cfg.NoComplete)
   registerCommand("init", git.init, cfg.NoComplete)
   registerCommand("pull", git.pull, cfg.NoComplete)
   registerCommand("push", git.push, cfg.NoComplete)

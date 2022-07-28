@@ -25,6 +25,7 @@ regexp = go.import"regexp"
 runtime = go.import"runtime"
 
 ACTIVE_COMMITS = {}
+LOADED_COMMANDS = {}
 
 errors =
   is_a_repo: "the current directory is already a repository"
@@ -33,6 +34,8 @@ errors =
   bad_label_arg: "invalid argument, please provide a valid rev label"
   not_enough_args: "not enough arguments"
   unknown_label: "given label is not known to this repo"
+  command_not_found: "invalid command provided (not a command)"
+  no_help: "FIXME: no help for command git."
 
 debug = (m) ->
   app.Log "#{NAME}: #{m}"
@@ -120,7 +123,6 @@ send_block = (->
     send_pane.Cursor.Loc.X = 0
     send_pane.Cursor\Relocate!
 )!
-
 
 make_empty_pane = (root, rszfn, header, fn) ->
   old_view = root\GetView!
@@ -334,7 +336,27 @@ git = (->
       (app.InfoBar!)\Message "git-#{cmd}: #{msg}"
       return
 
-  return {    
+  return {
+    help: (command) =>
+      unless LOADED_COMMANDS[command]
+        return send.help errors.command_not_found
+      unless LOADED_COMMANDS[command].help
+        return send.help (errors.no_help .. command)
+      _help = LOADED_COMMANDS[command].help
+      _help = str.Replace _help, "%pub%", "git", -1
+
+      help_out = ''
+      each_line _help, (line) ->
+        return if (tostring line)\match "^%s*$"
+        help_out ..= (str.TrimPrefix line, '      ') .. "\n"
+
+      send.help help_out
+      
+    help_help: [[
+      usage: %pub%.help <command>
+        Get usage informatino for a specific git command
+    ]]
+      
     init: =>
       cmd, err = new_command @Buf.Path
       unless cmd
@@ -743,6 +765,7 @@ registerCommand = (name, fn, cb) ->
     debug "command[#{external_name}] completed"
 
   cfg.MakeCommand external_name, cmd, cb
+  LOADED_COMMANDS[name] = { :cmd, help: git[name .. "_help"] }
 
 export init = ->
   debug "Initializing #{NAME}"
@@ -753,6 +776,7 @@ export init = ->
     if cmd == '' or not cmd
       app.TermMessage "#{NAME}: git not present in $PATH or set, some functionality will not work correctly"
 
+  registerCommand "help", git.help, cfg.NoComplete
   registerCommand "init", git.init, cfg.NoComplete
   registerCommand "pull", git.pull, cfg.NoComplete
   registerCommand "push", git.push, cfg.NoComplete
