@@ -249,7 +249,7 @@ git = (->
       out = shl.ExecCommand base, "-C", dir, ...
       return out
 
-    exec_async = (...) =>
+    exec_async = (cmd, ...) =>
       unless path_exists dir
         return nil, "directory #{dir} does not exist"
 
@@ -277,8 +277,10 @@ git = (->
       on_exit = (_, _) ->
         pane.Buf\Write "\n[command has completed, ctrl-q to exit]\n"
         return
-    
-      shl.JobSpawn base, {...}, on_emit, on_emit, on_exit
+
+      args = {...}
+      table.insert args, 1, cmd
+      shl.JobSpawn base, args, on_emit, on_emit, on_exit
       return "", nil
       
     in_repo = ->

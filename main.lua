@@ -229,7 +229,7 @@ git = (function()
       return out
     end
     local exec_async
-    exec_async = function(self, ...)
+    exec_async = function(self, cmd, ...)
       if not (path_exists(dir)) then
         return nil, "directory " .. tostring(dir) .. " does not exist"
       end
@@ -261,9 +261,11 @@ git = (function()
       on_exit = function(_, _)
         pane.Buf:Write("\n[command has completed, ctrl-q to exit]\n")
       end
-      shl.JobSpawn(base, {
+      local args = {
         ...
-      }, on_emit, on_emit, on_exit)
+      }
+      table.insert(args, 1, cmd)
+      shl.JobSpawn(base, args, on_emit, on_emit, on_exit)
       return "", nil
     end
     local in_repo
