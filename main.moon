@@ -857,9 +857,9 @@ export init = ->
   registerCommand "commit", git.commit, cfg.NoComplete
   registerCommand "status", git.status, cfg.NoComplete
   registerCommand "checkout", git.checkout, cfg.NoComplete
-  registerCommand "stage", git.stage, cfg.NoComplete
-  registerCommand "unstage", git.unstage, cfg.NoComplete
-  registerCommand "rm", git.rm, cfg.NoComplete
+  registerCommand "stage", git.stage, cfg.FileComplete
+  registerCommand "unstage", git.unstage, cfg.FileComplete
+  registerCommand "rm", git.rm, cfg.FileComplete
 
 export onBufPaneOpen = =>
   debug "Caught onBufPaneOpen bufpane:#{self}"
