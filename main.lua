@@ -39,11 +39,6 @@ local debug
 debug = function(m)
   return app.Log(tostring(NAME) .. ": " .. tostring(m))
 end
-local chomp
-chomp = function(s)
-  s = s:gsub("^%s*", ""):gsub("%s*$", ""):gsub("[\n\r]*$", "")
-  return s
-end
 local wordify
 wordify = function(word, singular, plural)
   singular = word .. singular
@@ -51,6 +46,16 @@ wordify = function(word, singular, plural)
   return function(number)
     return number ~= 1 and plural or singular
   end
+end
+local path_exists
+path_exists = function(filepath)
+  local finfo, _ = os.Stat(filepath)
+  return finfo ~= nil
+end
+local chomp
+chomp = function(s)
+  s = s:gsub("^%s*", ""):gsub("%s*$", ""):gsub("[\n\r]*$", "")
+  return s
 end
 local each_line
 each_line = function(input, fn)
@@ -69,11 +74,6 @@ each_line = function(input, fn)
     end
     fn(lines[i], finish)
   end
-end
-local path_exists
-path_exists = function(filepath)
-  local finfo, _ = os.Stat(filepath)
-  return finfo ~= nil
 end
 local make_temp = (function()
   local rand = go.import("math/rand")
@@ -119,7 +119,7 @@ local send_block = (function()
   end
 end)()
 local make_empty_pane
-make_empty_pane = function(root, rszfn, header, fn)
+make_empty_pane = function(root, rszfn, header)
   local old_view = root:GetView()
   local h = old_view.Height
   local pane = root:HSplitIndex(buf.NewBuffer("", header), true)
@@ -345,33 +345,6 @@ git = (function()
       end
     end
   })
-  local form_git_line
-  form_git_line = function(line, branch, commit, ch_upstream, ch_local, staged)
-    if line == nil then
-      line = ''
-    end
-    if branch == nil then
-      branch = 'ERROR'
-    end
-    if commit == nil then
-      commit = 'ERROR'
-    end
-    if ch_upstream == nil then
-      ch_upstream = 0
-    end
-    if ch_local == nil then
-      ch_local = 0
-    end
-    if staged == nil then
-      staged = 0
-    end
-    line = line:gsub('%$%(bind:ToggleKeyMenu%): bindings, %$%(bind:ToggleHelp%): help', '')
-    if line ~= '' then
-      line = tostring(line) .. " | "
-    end
-    line = " " .. tostring(line) .. tostring(branch) .. " ↑" .. tostring(ch_upstream) .. " ↓" .. tostring(ch_local) .. " ↓↑" .. tostring(staged) .. " | commit:" .. tostring(commit)
-    return line
-  end
   local update_branch_status
   update_branch_status = function(self, cmd)
     debug("update_branch_status: Update initiated")

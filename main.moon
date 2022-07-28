@@ -42,13 +42,8 @@ errors =
   command_not_found: "invalid command provided (not a command)"
   no_help: "FIXME: no help for command git."
 
-debug = (m) ->
-  app.Log "#{NAME}: #{m}"
+debug = (m) -> app.Log "#{NAME}: #{m}"
 
---- Delete leading and trailing spaces, and the final newline
-chomp = (s) ->
-  s = s\gsub("^%s*", "")\gsub("%s*$", "")\gsub("[\n\r]*$", "")
-  return s
 
 --- Generate a function that takes a number, and returns the correct plurality of a word
 wordify = (word, singular, plural) ->
@@ -56,6 +51,19 @@ wordify = (word, singular, plural) ->
   plural   = word .. plural
   (number) ->
     number != 1 and plural or singular
+
+
+--- If a path is accessible, return true. Otherwise, false
+path_exists = (filepath) ->
+  finfo, _ = os.Stat filepath
+  return finfo != nil
+
+
+--- Delete leading and trailing spaces, and the final newline
+chomp = (s) ->
+  s = s\gsub("^%s*", "")\gsub("%s*$", "")\gsub("[\n\r]*$", "")
+  return s
+
 
 --- Run a given function for each line in a string
 each_line = (input, fn) ->
@@ -72,9 +80,6 @@ each_line = (input, fn) ->
 
     fn lines[i], finish
 
-path_exists = (filepath) ->
-  finfo, _ = os.Stat filepath
-  return finfo != nil
 
 make_temp = (->
   rand = go.import "math/rand"
@@ -99,6 +104,9 @@ make_temp = (->
     return tostring path.Join dir, file
 )!
 
+
+--- Create a new readonly scratch pane with the contents of output
+--
 -- Inspired heavily by filemanager
 -- https://github.com/micro-editor/updated-plugins/blob/master/filemanager-plugin/filemanager.lua
 send_block = (->
@@ -129,7 +137,9 @@ send_block = (->
     send_pane.Cursor\Relocate!
 )!
 
-make_empty_pane = (root, rszfn, header, fn) ->
+
+--- Create a new readonly scratch pane and return it
+make_empty_pane = (root, rszfn, header) ->
   old_view = root\GetView!
   h = old_view.Height
   pane = root\HSplitIndex(buf.NewBuffer("", header), true)
@@ -148,6 +158,14 @@ make_empty_pane = (root, rszfn, header, fn) ->
   return pane
 
 
+
+--- Create a new readonly scratch pane with the contents of output. Add that
+-- pane to the list of ACTIVE_COMMITS, and write the contents of output to
+-- a temporary file.
+--
+-- The provided callback function should have the signature with string being
+-- a filepath.
+--   (string) ->
 make_commit_pane = (root, output, header, fn) ->
   old_view = root\GetView!
   h = old_view.Height
@@ -187,8 +205,10 @@ make_commit_pane = (root, output, header, fn) ->
 local git
 local set_callbacks
 
+
 bound = (n, min, max) ->
   n > max and max or (n < min and min or n)
+
 
 -- filepath.Abs and filepath.IsAbs both exist, however, their use in Lua code
 -- here currently panics the application. Until then, we'll just have to rely
@@ -221,18 +241,22 @@ get_path_info = (->
     return abs, pwd, split_path[bound(l, 1, l)]
 )!
 
+
 git = (->
   w_commit  = wordify 'commit', '', 's'
   w_line    = wordify 'line', '', 's'
   re_commit = regexp.MustCompile"^commit[\\s]+([^\\s]+).*$"
-  
+
+  --- Generate a new git command context for the filepath. All git commands
+  -- run through this context will run with -C "filepath"
   new_command = (filepath) ->
     if type(filepath) != 'string' or filepath == ''
       debug "filepath [#{filepath}] is not a valid editor path (need string): (got: #{type filepath})"
       return nil, "Please run this in a file pane"
 
     abs, dir, name = get_path_info filepath
-   
+
+    --- Execute a git command with arguments and return the output
     exec = (...) ->
       unless path_exists dir
         return nil, "directory #{dir} does not exist"
@@ -253,6 +277,9 @@ git = (->
       out = shl.ExecCommand base, "-C", dir, ...
       return out
 
+
+    --- Execute the git command with arguments in the background, and fill a new
+    -- pane with the contents of it's stdout.
     exec_async = (cmd, ...) =>
       unless path_exists dir
         return nil, "directory #{dir} does not exist"
@@ -284,11 +311,15 @@ git = (->
       table.insert args, 1, cmd
       shl.JobSpawn base, args, on_emit, on_emit, on_exit
       return "", nil
-      
+
+    --- Return true or false dependent on whether or not the context is a repo
     in_repo = ->
       out, _ = exec "rev-parse", "--is-inside-work-tree"
       return chomp(out) == 'true'
-      
+
+
+    --- Parse all of the known branches and return both those branches, and the 
+    -- name of the current branch
     get_branches = ->
       out, _ = exec "branch", "-al"
       branches = {}
@@ -316,6 +347,8 @@ git = (->
 
       return branches, current
 
+
+    --- Return the revision hash for a given label, or false
     known_label = (label) ->
       out, err = exec "rev-parse", "--quiet", "--verify", label
       unless (err and err != "") or (out and out != "")
@@ -323,6 +356,7 @@ git = (->
       return chomp(out)
 
     return { :new, :exec, :exec_async, :in_repo, :known_label, :get_branches }
+
 
   --- Issue a message to the buffer with a neat syntax.
   -- If a string has more than one line, use a pane. Otherwise, issue a message
@@ -344,13 +378,8 @@ git = (->
       (app.InfoBar!)\Message "git-#{cmd}: #{msg}"
       return
 
-  form_git_line = (line='', branch='ERROR', commit='ERROR', ch_upstream=0, ch_local=0, staged=0) ->
-    line = line\gsub '%$%(bind:ToggleKeyMenu%): bindings, %$%(bind:ToggleHelp%): help', ''
-    if line != ''
-      line = "#{line} | "
-    line = " #{line}#{branch} ↑#{ch_upstream} ↓#{ch_local} ↓↑#{staged} | commit:#{commit}"
-    return line
 
+  --- Update branch tracked branch information for a buffer
   update_branch_status = (cmd) =>
     debug "update_branch_status: Update initiated"
 
@@ -494,7 +523,6 @@ git = (->
         Checkout a specific branch, tag, or revision
     ]]
 
-    --- List all of the branches in the current repository
     list: =>
       cmd, err = new_command @Buf.Path
       unless cmd
@@ -539,7 +567,6 @@ git = (->
         Show current status of the active repo
     ]]
     
-    --- Create a new git-branch and switch to it
     branch: (->
       re_valid_label = regexp.MustCompile"^[a-zA-Z-_/.]+$"
 
@@ -584,7 +611,6 @@ git = (->
         Note: Performs a git-fetch prior to making any changes.
     ]]
 
-    --- Commit changes to the current branch
     commit: (->    
       msg_line = regexp.MustCompile"^\\s*([^#])"
       base_msg = "\n"
@@ -646,7 +672,6 @@ git = (->
         pane is saved and then closed.
     ]]
 
-    --- Push local changes for branch (or all, if none specified) to remotes
     push: (->    
       re_valid_label = regexp.MustCompile"^[a-zA-Z-_/.]+$"
       
@@ -676,7 +701,6 @@ git = (->
         are pushed.
     ]]
 
-    --- Pull changes from remotes into local
     pull: =>
       cmd, err = new_command @Buf.Path
       unless cmd
@@ -694,7 +718,6 @@ git = (->
         Pull all changes from remote into the working tree
     ]]
 
-    --- Show git commit log
     log: =>
       cmd, err = new_command @Buf.Path
       unless cmd
@@ -907,10 +930,14 @@ export init = ->
   registerCommand "unstage", git.unstage, cfg.FileComplete
   registerCommand "rm", git.rm, cfg.FileComplete
 
+
+--- Populate branch tracking information for the buffer
 export onBufPaneOpen = =>
   debug "Caught onBufPaneOpen bufpane:#{self}"
   git.update_branch_status @Buf
-  
+
+--- Update branch tracking for the buffer, and if its a commit pane mark it as
+-- ready to commit
 export onSave = =>
   debug "Caught onSave bufpane:#{self}"
   git.update_branch_status @Buf
@@ -921,7 +948,10 @@ export onSave = =>
       debug "Marking commit #{i} as ready ..."
       commit.ready = true
       break
-      
+
+--- Remove a buffers path from tracking, and if we are in a commit pane call its
+-- callback function if it's been modified and saved. Alternatively, hijack the
+-- commit save prompt and offer a confirmation to save and commit.
 export onQuit = =>
   debug "Caught onQuit, buf:#{@}"
 
