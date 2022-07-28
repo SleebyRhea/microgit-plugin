@@ -182,7 +182,7 @@ git = (function()
   local new_command
   new_command = function(filepath)
     if type(filepath) ~= 'string' or filepath == '' then
-      debug("filepath [" .. tostring(tostring(filepath)) .. "] is not a valid editor path (need string): (got: " .. tostring(type(filepath)) .. ")")
+      debug("filepath [" .. tostring(filepath) .. "] is not a valid editor path (need string): (got: " .. tostring(type(filepath)) .. ")")
       return nil, "Please run this in an editor pane"
     end
     local abs, dir, name = get_path_info(filepath)

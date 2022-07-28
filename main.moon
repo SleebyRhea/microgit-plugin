@@ -203,7 +203,7 @@ git = (->
     -- currently panics the application. Until then, we'll just have to rely
     -- on something hacky in the meantime.
     if type(filepath) != 'string' or filepath == ''
-      debug "filepath [#{tostring filepath}] is not a valid editor path (need string): (got: #{type filepath})"
+      debug "filepath [#{filepath}] is not a valid editor path (need string): (got: #{type filepath})"
       return nil, "Please run this in an editor pane"
 
     abs, dir, name = get_path_info filepath
