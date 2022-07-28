@@ -21,8 +21,7 @@ local regexp = go.import("regexp")
 local runtime = go.import("runtime")
 local ACTIVE_COMMITS = { }
 local LOADED_COMMANDS = { }
-cfg.RegisterCommonOption("git", "path", "")
-cfg.RegisterCommonOption("git", "onsave", true)
+cfg.RegisterCommonOption("git", "command", "")
 cfg.RegisterCommonOption("git", "statusline", true)
 local errors = {
   is_a_repo = "the current directory is already a repository",
@@ -227,7 +226,7 @@ git = (function()
         return nil, "directory " .. tostring(dir) .. " does not exist"
       end
       debug("Parent directory " .. tostring(dir) .. " exists, continuing ...")
-      local base = cfg.GetGlobalOption("git.path")
+      local base = cfg.GetGlobalOption("git.command")
       if base == "" then
         local _
         base, _ = shl.ExecCommand("command", "-v", "git")
@@ -250,7 +249,7 @@ git = (function()
         return nil, "directory " .. tostring(dir) .. " does not exist"
       end
       debug("Parent directory " .. tostring(dir) .. " exists, continuing ...")
-      local base = cfg.GetGlobalOption("git.path")
+      local base = cfg.GetGlobalOption("git.command")
       if base == "" then
         local _
         base, _ = shl.ExecCommand("command", "-v", "git")
@@ -923,7 +922,7 @@ preinit = function()
 end
 init = function()
   debug("Initializing " .. tostring(NAME))
-  local cmd = cfg.GetGlobalOption("git.path")
+  local cmd = cfg.GetGlobalOption("git.command")
   if cmd == "" then
     local _
     cmd, _ = shl.ExecCommand("command", "-v", "git")

@@ -28,8 +28,7 @@ ACTIVE_COMMITS = {}
 LOADED_COMMANDS = {}
 
 -- TODO: Implement git statusline information
-cfg.RegisterCommonOption "git", "path", ""
-cfg.RegisterCommonOption "git", "onsave", true
+cfg.RegisterCommonOption "git", "command", ""
 cfg.RegisterCommonOption "git", "statusline", true
 
 errors =
@@ -247,7 +246,7 @@ git = (->
         return nil, "directory #{dir} does not exist"
 
       debug "Parent directory #{dir} exists, continuing ..."
-      base = cfg.GetGlobalOption "git.path"
+      base = cfg.GetGlobalOption "git.command"
       if base == ""
         base, _ = shl.ExecCommand "command", "-v", "git"
         base = chomp base
@@ -267,7 +266,7 @@ git = (->
         return nil, "directory #{dir} does not exist"
 
       debug "Parent directory #{dir} exists, continuing ..."
-      base = cfg.GetGlobalOption "git.path"
+      base = cfg.GetGlobalOption "git.command"
       if base == ""
         base, _ = shl.ExecCommand "command", "-v", "git"
         base = chomp base
@@ -843,7 +842,7 @@ export preinit = ->
 export init = ->
   debug "Initializing #{NAME}"
 
-  cmd = cfg.GetGlobalOption "git.path"
+  cmd = cfg.GetGlobalOption "git.command"
   if cmd == ""
     cmd, _ = shl.ExecCommand "command", "-v", "git"
     if cmd == '' or not cmd
