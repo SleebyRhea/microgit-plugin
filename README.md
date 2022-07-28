@@ -18,13 +18,15 @@ Adds a number of commands to make working with git repos within Micro a more sea
   - `git.push(str)`
     - Push changes from local onto remove for the provided label (likely a branch)
   - `git.list()`
-    - List the local and remote branches, and show currently checkedout revision
+    - List the local and remote branches
   - `git.log()`
     - Show the commit log
   - `git.checkout(str)`
     - Checkout a specific label (tag/branch/revision)
   - `git.commit(str)`
     - Commit changes to your local tree. If `str` is provided, it is used as the commit message. Otherwise, a buffer is opened for editting and the contents will be used instead
+  - `git.commit(str)`
+    - Checkout a new branch, and switch to it
   - `git.status()`
     - Show current status of the repository
   - `git.stage(str...)`

@@ -324,7 +324,9 @@ git = (->
 
     known_label = (label) ->
       out, err = exec "rev-parse", label
-      return err != "" and false or chomp(out)
+      if err and err != ""
+        return false
+      return chomp out
 
     return { :new, :exec, :exec_async, :in_repo, :known_label, :get_branches }
 
@@ -854,6 +856,7 @@ export init = ->
   registerCommand "log", git.log, cfg.NoComplete
   registerCommand "commit", git.commit, cfg.NoComplete
   registerCommand "status", git.status, cfg.NoComplete
+  registerCommand "branch", git.branch, cfg.NoComplete
   registerCommand "checkout", git.checkout, cfg.NoComplete
   registerCommand "stage", git.stage, cfg.FileComplete
   registerCommand "unstage", git.unstage, cfg.FileComplete

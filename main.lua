@@ -319,7 +319,10 @@ git = (function()
     local known_label
     known_label = function(label)
       local out, err = exec("rev-parse", label)
-      return err ~= "" and false or chomp(out)
+      if err and err ~= "" then
+        return false
+      end
+      return chomp(out)
     end
     return {
       new = new,
@@ -939,6 +942,7 @@ init = function()
   registerCommand("log", git.log, cfg.NoComplete)
   registerCommand("commit", git.commit, cfg.NoComplete)
   registerCommand("status", git.status, cfg.NoComplete)
+  registerCommand("branch", git.branch, cfg.NoComplete)
   registerCommand("checkout", git.checkout, cfg.NoComplete)
   registerCommand("stage", git.stage, cfg.FileComplete)
   registerCommand("unstage", git.unstage, cfg.FileComplete)
