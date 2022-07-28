@@ -131,7 +131,7 @@ make_commit_pane = function(output, header, fn)
   commit_pane.Buf:SetOptionNative("statusformatl", header)
   commit_pane.Buf:SetOptionNative("scrollbar", false)
   commit_pane.Buf:SetOptionNative("", false)
-  commit_pane.Cursor.Loc.Y = 000
+  commit_pane.Cursor.Loc.Y = 0
   commit_pane.Cursor.Loc.X = 0
   commit_pane.Cursor:Relocate()
   return table.insert(ACTIVE_COMMITS, {
