@@ -21,6 +21,9 @@ local regexp = go.import("regexp")
 local runtime = go.import("runtime")
 local ACTIVE_COMMITS = { }
 local LOADED_COMMANDS = { }
+cfg.RegisterCommonOption("git", "path", "")
+cfg.RegisterCommonOption("git", "onsave", true)
+cfg.RegisterCommonOption("git", "statusline", true)
 local errors = {
   is_a_repo = "the current directory is already a repository",
   not_a_repo = "the current directory is not a repository",
@@ -39,6 +42,16 @@ local chomp
 chomp = function(s)
   s = s:gsub("^%s*", ""):gsub("%s*$", ""):gsub("[\n\r]*$", "")
   return s
+end
+local numeric
+numeric = function(...)
+  local rets = { }
+  local _list_0 = { }
+  for _index_0 = 1, #_list_0 do
+    local a = _list_0[_index_0]
+    table.insert(rets, tonumber(a))
+  end
+  return unpack(rets)
 end
 local wordify
 wordify = function(word, singular, plural)
@@ -333,7 +346,92 @@ git = (function()
       end
     end
   })
+  local form_git_line
+  form_git_line = function(line, branch, commit, ch_upstream, ch_local, staged)
+    if line == nil then
+      line = ''
+    end
+    if branch == nil then
+      branch = 'ERROR'
+    end
+    if commit == nil then
+      commit = 'ERROR'
+    end
+    if ch_upstream == nil then
+      ch_upstream = 0
+    end
+    if ch_local == nil then
+      ch_local = 0
+    end
+    if staged == nil then
+      staged = 0
+    end
+    line = line:gsub('%$%(bind:ToggleKeyMenu%): bindings, %$%(bind:ToggleHelp%): help', '')
+    if line ~= '' then
+      line = tostring(line) .. " | "
+    end
+    line = tostring(line) .. tostring(branch) .. " ↑" .. tostring(ch_upstream) .. " ↓" .. tostring(ch_local) .. " ↓↑" .. tostring(staged) .. " | commit:" .. tostring(commit)
+    return line
+  end
+  local update_git_line
+  update_git_line = function(self, cmd)
+    if not (cfg.GetGlobalOption("git.statusline")) then
+      return 
+    end
+    if not ((not self.Buf.Type.Scratch) and (self.Buf.Path ~= '')) then
+      return 
+    end
+    if not (cmd) then
+      local err
+      cmd, err = new_command(self.Buf.Path)
+      if not (cmd) then
+        return send.statusline((err .. " (to suppress this message, set git.statusline to false)"))
+      end
+    end
+    if not (cmd.in_repo()) then
+      return 
+    end
+    local branch, revision = nil, nil
+    debug("Getting branch label ...")
+    local out, err = cmd.exec("branch", "--show-current")
+    if not (err) then
+      branch = chomp(out)
+    end
+    debug("Getting HEAD short hash ...")
+    out, err = cmd.exec("rev-parse", "--short", "HEAD")
+    if not (err) then
+      revision = chomp(out)
+    end
+    local liner = tostring(cfg.GetGlobalOption("statusliner"))
+    if liner == 'nil' or liner == nil then
+      liner = ''
+    end
+    local ahead, behind, staged = 0, 0, 0
+    if branch then
+      debug("Getting revision count differences")
+      out, err = cmd.exec("rev-list", "--left-right", "--count", "origin/" .. tostring(branch) .. "..." .. tostring(branch))
+      if not (err) then
+        ahead, behind = numeric((chomp(out)):match("([%d]+)"))
+      end
+    end
+    debug("Getting staged count")
+    out, err = cmd.exec("diff", "--name-only", "--cached")
+    if not (err) then
+      staged = select(2, (chomp(out)):gsub("([^%s\r\n]+)", ''))
+    end
+    debug("Forming new git-line")
+    local line = form_git_line(liner, branch, revision, ahead, behind, staged)
+    return self.Buf:SetOptionNative("statusformatr", line)
+  end
+  local callbacks = {
+    onBufPaneOpen = function(self)
+      debug("Caught onBufPaneOpen bufpane:" .. tostring(self))
+      return update_git_line(self)
+    end
+  }
   return {
+    callbacks = callbacks,
+    update_git_line = update_git_line,
     help = function(self, command)
       if not (LOADED_COMMANDS[command]) then
         return send.help(errors.command_not_found)
@@ -353,7 +451,7 @@ git = (function()
       return send.help(help_out)
     end,
     help_help = [[      usage: %pub%.help <command>
-        Get usage informatino for a specific git command
+        Get usage information for a specific git command
     ]],
     init = function(self)
       local cmd, err = new_command(self.Buf.Path)
@@ -784,9 +882,6 @@ git = (function()
     ]]
   }
 end)()
-cfg.RegisterCommonOption("git", "path", "")
-cfg.RegisterCommonOption("git", "onsave", true)
-cfg.RegisterCommonOption("git", "status_line", true)
 local registerCommand
 registerCommand = function(name, fn, cb)
   local external_name = "git." .. tostring(name)
@@ -807,7 +902,8 @@ registerCommand = function(name, fn, cb)
     else
       fn(any)
     end
-    return debug("command[" .. tostring(external_name) .. "] completed")
+    debug("command[" .. tostring(external_name) .. "] completed")
+    git.update_git_line(any)
   end
   cfg.MakeCommand(external_name, cmd, cb)
   LOADED_COMMANDS[name] = {
@@ -838,6 +934,7 @@ init = function()
   registerCommand("unstage", git.unstage, cfg.NoComplete)
   return registerCommand("rm", git.rm, cfg.NoComplete)
 end
+onBufPaneOpen = git.callbacks.onBufPaneOpen
 preinit = function()
   debug("Clearing stale commit files ...")
   local pfx = tostring(NAME) .. ".commit."
@@ -856,6 +953,7 @@ preinit = function()
   end
 end
 onSave = function(self)
+  git.update_git_line(self)
   if not (#ACTIVE_COMMITS > 0) then
     return 
   end

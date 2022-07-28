@@ -27,6 +27,11 @@ runtime = go.import"runtime"
 ACTIVE_COMMITS = {}
 LOADED_COMMANDS = {}
 
+-- TODO: Implement git statusline information
+cfg.RegisterCommonOption "git", "path", ""
+cfg.RegisterCommonOption "git", "onsave", true
+cfg.RegisterCommonOption "git", "statusline", true
+
 errors =
   is_a_repo: "the current directory is already a repository"
   not_a_repo: "the current directory is not a repository"
@@ -44,6 +49,12 @@ debug = (m) ->
 chomp = (s) ->
   s = s\gsub("^%s*", "")\gsub("%s*$", "")\gsub("[\n\r]*$", "")
   return s
+
+numeric = (...) ->
+  rets = {}
+  for a in *{}
+    table.insert rets, tonumber(a)
+  return unpack rets
 
 --- Generate a function that takes a number, and returns the correct plurality of a word
 wordify = (word, singular, plural) ->
@@ -336,7 +347,64 @@ git = (->
       (app.InfoBar!)\Message "git-#{cmd}: #{msg}"
       return
 
+  form_git_line = (line='', branch='ERROR', commit='ERROR', ch_upstream=0, ch_local=0, staged=0) ->
+    line = line\gsub '%$%(bind:ToggleKeyMenu%): bindings, %$%(bind:ToggleHelp%): help', ''
+    if line != ''
+      line = "#{line} | "
+    line = "#{line}#{branch} ↑#{ch_upstream} ↓#{ch_local} ↓↑#{staged} | commit:#{commit}"
+    return line
+
+  update_git_line = (cmd) =>
+    return unless cfg.GetGlobalOption "git.statusline"
+    return unless (not @Buf.Type.Scratch) and (@Buf.Path != '')
+    
+    unless cmd
+      cmd, err = new_command @Buf.Path
+      return send.statusline (err .. " (to suppress this message, set git.statusline to false)") unless cmd
+      
+    return unless cmd.in_repo!
+
+    branch, revision = nil, nil
+
+    debug "Getting branch label ..."
+    out, err = cmd.exec "branch", "--show-current"
+    unless err
+      branch = chomp out
+
+    debug "Getting HEAD short hash ..."
+    out, err = cmd.exec "rev-parse", "--short", "HEAD"
+    unless err
+      revision = chomp out
+      
+    liner = tostring cfg.GetGlobalOption"statusliner"
+    if liner == 'nil' or liner == nil
+      liner = ''
+
+    ahead, behind, staged = 0, 0, 0
+    if branch
+      debug "Getting revision count differences"
+      out, err = cmd.exec "rev-list", "--left-right", "--count", "origin/#{branch}...#{branch}"
+      unless err
+        ahead, behind = numeric (chomp out)\match("([%d]+)")
+
+    debug "Getting staged count"
+    out, err = cmd.exec "diff", "--name-only", "--cached"
+    unless err
+      staged = select(2, (chomp out)\gsub("([^%s\r\n]+)", ''))
+
+    debug "Forming new git-line"
+    line = form_git_line liner, branch, revision, ahead, behind, staged
+    @Buf\SetOptionNative "statusformatr", line
+
+  callbacks = 
+    onBufPaneOpen: =>    
+      debug "Caught onBufPaneOpen bufpane:#{self}"
+      update_git_line self
+
   return {
+    :callbacks
+    :update_git_line
+  
     help: (command) =>
       unless LOADED_COMMANDS[command]
         return send.help errors.command_not_found
@@ -354,7 +422,7 @@ git = (->
       
     help_help: [[
       usage: %pub%.help <command>
-        Get usage informatino for a specific git command
+        Get usage information for a specific git command
     ]]
       
     init: =>
@@ -746,11 +814,6 @@ git = (->
   }
 )!
 
--- TODO: Implement git statusline information
-cfg.RegisterCommonOption "git", "path", ""
-cfg.RegisterCommonOption "git", "onsave", true
-cfg.RegisterCommonOption "git", "status_line", true
-
 --- Register a provided function+callback as a command
 -- Wraps the given function to account for Micros handling of arguments placing
 -- additional arguments of len size > 1 in a Go array
@@ -763,6 +826,8 @@ registerCommand = (name, fn, cb) ->
     else
       fn any
     debug "command[#{external_name}] completed"
+    git.update_git_line any
+    return
 
   cfg.MakeCommand external_name, cmd, cb
   LOADED_COMMANDS[name] = { :cmd, help: git[name .. "_help"] }
@@ -789,6 +854,8 @@ export init = ->
   registerCommand "unstage", git.unstage, cfg.NoComplete
   registerCommand "rm", git.rm, cfg.NoComplete
 
+export onBufPaneOpen = git.callbacks.onBufPaneOpen
+
 export preinit = ->
   debug "Clearing stale commit files ..."
   pfx = "#{NAME}.commit."
@@ -803,7 +870,9 @@ export preinit = ->
         debug "Clearing #{filepath}"
         os.Remove filepath
 
+
 export onSave = =>
+    git.update_git_line self
     return unless #ACTIVE_COMMITS > 0
 
     for i, commit in ipairs ACTIVE_COMMITS
@@ -811,6 +880,7 @@ export onSave = =>
         debug "Marking commit #{i} as ready ..."
         commit.ready = true
         break
+  
 
 export onQuit = =>
   debug "Caught onQuit, buf:#{@}"
