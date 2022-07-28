@@ -324,9 +324,9 @@ git = (->
 
     known_label = (label) ->
       out, err = exec "rev-parse", "--quiet", "--verify", label
-      if err and err != ""
+      if (err and err != "") or (out and out != "")
         return false
-      return chomp out
+      return chomp(out)
 
     return { :new, :exec, :exec_async, :in_repo, :known_label, :get_branches }
 
@@ -547,7 +547,7 @@ git = (->
         -- only repository
         out = ''
         fetch_out, _ = cmd.exec "fetch"
-        out ..= "> git fetch"
+        out ..= "> git fetch\n"
         out ..= fetch_out
 
         if rev = cmd.known_label label

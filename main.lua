@@ -319,7 +319,7 @@ git = (function()
     local known_label
     known_label = function(label)
       local out, err = exec("rev-parse", "--quiet", "--verify", label)
-      if err and err ~= "" then
+      if (err and err ~= "") or (out and out ~= "") then
         return false
       end
       return chomp(out)
@@ -577,7 +577,7 @@ git = (function()
         end
         local out = ''
         local fetch_out, _ = cmd.exec("fetch")
-        out = out .. "> git fetch"
+        out = out .. "> git fetch\n"
         out = out .. fetch_out
         do
           local rev = cmd.known_label(label)
