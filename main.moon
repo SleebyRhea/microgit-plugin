@@ -994,15 +994,17 @@ export onQuit = =>
           
           info\YNPrompt "Would you like to save and commit? (y,n,esc)",
             (yes, cancelled) ->
-              if cancelled
-                return
+              return if cancelled
+              
               if yes
                 @Buf\Save!
                 @ForceQuit!
+
                 commit.callback commit.file
                 debug "Removing #{commit.file}"
                 os.Remove commit.file
                 debug "Popping commit #{i} from stack"
+                
                 for t, _temp in ipairs ACTIVE_COMMITS
                   if _temp == commit
                     table.remove ACTIVE_COMMITS, t
@@ -1013,3 +1015,5 @@ export onQuit = =>
                 info\Message "Aborted commit (closed before saving)"
                 @ForceQuit!
               return
+
+        break
