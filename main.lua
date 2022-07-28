@@ -346,6 +346,9 @@ git = (function()
       end
       return send.init(out)
     end,
+    init_help = [[      usage: %pub%.init
+        Initialize a repository in the current panes directory
+    ]],
     fetch = function(self)
       local cmd, err = new_command(self.Buf.Path)
       if not (cmd) then
@@ -361,6 +364,9 @@ git = (function()
       end
       return send.fetch(out)
     end,
+    fetch_help = [[      usage: %pub%.fetch
+        Fetch latest changes from remotes
+    ]],
     checkout = (function()
       local re_valid_label = regexp.MustCompile("^[a-zA-Z-_/.]+$")
       return function(self, label)
@@ -388,7 +394,10 @@ git = (function()
         return send.checkout(out)
       end
     end)(),
-    listbranches = function(self)
+    checkout_help = [[      usage: %pub%.help <label>
+        Checkout a specific branch, tag, or revision
+    ]],
+    list = function(self)
       local cmd, err = new_command(self.Buf.Path)
       if not (cmd) then
         return send.list(err)
@@ -414,6 +423,9 @@ git = (function()
       end
       return send.list_branches(output)
     end,
+    list_help = [[      usage: %pub%.list
+        List branches, and note the currently active branch
+    ]],
     status = function(self)
       local cmd, err = new_command(self.Buf.Path)
       if not (cmd) then
@@ -429,6 +441,9 @@ git = (function()
       end
       return send.status(status_out)
     end,
+    status_help = [[      usage: %pub%.status
+        Show current status of the active repo
+    ]],
     branch = (function()
       local re_valid_label = regexp.MustCompile("^[a-zA-Z-_/.]+$")
       return function(self, label)
@@ -465,6 +480,11 @@ git = (function()
         return send.branch(out)
       end
     end)(),
+    branch_help = [[      usage: %pub%.branch <label>
+        Create a new local branch, and switch to it
+
+        Note: Performs a git-fetch prior to making any changes.
+    ]],
     commit = (function()
       local msg_line = regexp.MustCompile("^\\s*([^#])")
       local base_msg = "\n"
@@ -522,6 +542,11 @@ git = (function()
         debug("Awaiting commit completion within onQuit")
       end
     end)(),
+    commit_help = [[      usage: %pub%.commit [<commit message>]
+        Begin a new commit. If a commit message is not provided, opens a new
+        pane to enter the desired message into. Commit is initiated when the
+        pane is saved and then closed.
+    ]],
     push = (function()
       local re_valid_label = regexp.MustCompile("^[a-zA-Z-_/.]+$")
       return function(self, branch)
@@ -546,6 +571,11 @@ git = (function()
         end
       end
     end)(),
+    push_help = [[      usage: %pub%.push [<label>]
+        Push local changes onto remote. A branch label is optional, and limits
+        the scope of the push to the provided branch. Otherwise, all changes
+        are pushed.
+    ]],
     pull = function(self)
       local cmd, err = new_command(self.Buf.Path)
       if not (cmd) then
@@ -561,6 +591,9 @@ git = (function()
       end
       return send.pull(pull_out)
     end,
+    pull_help = [[      usage: %pub%.pull
+        Pull all changes from remote into the working tree
+    ]],
     log = function(self)
       local cmd, err = new_command(self.Buf.Path)
       if not (cmd) then
@@ -584,36 +617,103 @@ git = (function()
         header = tostring(count) .. " " .. tostring(w_commit(count))
       })
     end,
-    add = function(self, ...)
+    log_help = [[      usage: %pub%.log
+        Show the commit log
+    ]],
+    stage = function(self, ...)
       local cmd, err = new_command(self.Buf.Path)
       if not (cmd) then
-        return send.add(err)
+        return send.stage(err)
       end
       if not (cmd.in_repo()) then
-        return send.add(errors.not_a_repo)
+        return send.stage(errors.not_a_repo)
       end
       local files = { }
       local _list_0 = {
         ...
       }
       for _index_0 = 1, #_list_0 do
-        local file = _list_0[_index_0]
-        if file == "." then
-          files = {
-            "."
-          }
+        local _continue_0 = false
+        repeat
+          local file = _list_0[_index_0]
+          if file == ".." then
+            _continue_0 = true
+            break
+          end
+          if file == "--all" then
+            files = {
+              "."
+            }
+            break
+          end
+          if not (path_exists(file)) then
+            return send.stage(errors.invalid_arg .. "(file " .. tostring(file) .. " doesn't exist)")
+          end
+          table.insert(files, file)
+          _continue_0 = true
+        until true
+        if not _continue_0 then
           break
         end
-        if not (path_exists(file)) then
-          return send.add(errors.invalid_arg .. "(file " .. tostring(file) .. " doesn't exist)")
-        end
-        table.insert(files, file)
       end
       if not (#files > 0) then
-        return send.add(errors.not_enough_args .. ", please supply a file")
+        return send.stage(errors.not_enough_args .. ", please supply a file")
       end
       return cmd.exec("add", unpack(files))
     end,
+    stage_help = [[      usage: %pub%.stage [<file1>, <file2>, ...] [<options>]
+        Stage a file (or files) to commit.
+
+        Options:
+          --all   Stage all files
+    ]],
+    unstage = function(self, ...)
+      local cmd, err = new_command(self.Buf.Path)
+      if not (cmd) then
+        return send.unstage(err)
+      end
+      if not (cmd.in_repo()) then
+        return send.unstage(errors.not_a_repo)
+      end
+      local files = { }
+      local all = false
+      local _list_0 = {
+        ...
+      }
+      for _index_0 = 1, #_list_0 do
+        local _continue_0 = false
+        repeat
+          local file = _list_0[_index_0]
+          if file == ".." then
+            _continue_0 = true
+            break
+          end
+          if file == "--all" then
+            files = { }
+            all = true
+            break
+          end
+          if not (path_exists(file)) then
+            return send.unstage(errors.invalid_arg .. "(file " .. tostring(file) .. " doesn't exist)")
+          end
+          table.insert(files, file)
+          _continue_0 = true
+        until true
+        if not _continue_0 then
+          break
+        end
+      end
+      if not ((#files > 0) or all) then
+        return send.unstage(errors.not_enough_args .. ", please supply a file")
+      end
+      return cmd.exec("reset", "--", unpack(files))
+    end,
+    unstage_help = [[      usage: %pub%.unstage [<file1>, <file2>, ...] [<options>]
+        Unstage a file (or files) to commit.
+
+        Options:
+          --all   Unstage all files
+    ]],
     rm = function(self, ...)
       local cmd, err = new_command(self.Buf.Path)
       if not (cmd) then
@@ -627,23 +727,37 @@ git = (function()
         ...
       }
       for _index_0 = 1, #_list_0 do
-        local file = _list_0[_index_0]
-        if file == "." then
-          files = {
-            "."
-          }
+        local _continue_0 = false
+        repeat
+          local file = _list_0[_index_0]
+          if file == ".." then
+            _continue_0 = true
+            break
+          end
+          if file == "." then
+            files = {
+              "."
+            }
+            break
+          end
+          if not (path_exists(file)) then
+            return send.rm(errors.invalid_arg .. "(file " .. tostring(file) .. " doesn't exist)")
+          end
+          table.insert(files, file)
+          _continue_0 = true
+        until true
+        if not _continue_0 then
           break
         end
-        if not (path_exists(file)) then
-          return send.rm(errors.invalid_arg .. "(file " .. tostring(file) .. " doesn't exist)")
-        end
-        table.insert(files, file)
       end
       if not (#files > 0) then
         return send.rm(errors.not_enough_args .. ", please supply a file")
       end
       return cmd.exec("rm", unpack(files))
-    end
+    end,
+    rm_help = [[      usage: %pub%.rm [<file1>, <file2>, ...]
+        Stage the removal of a file (or files) from the git repo.
+    ]]
   }
 end)()
 cfg.RegisterCommonOption("git", "path", "")
@@ -651,9 +765,10 @@ cfg.RegisterCommonOption("git", "onsave", true)
 cfg.RegisterCommonOption("git", "status_line", true)
 local registerCommand
 registerCommand = function(name, fn, cb)
+  local external_name = "git." .. tostring(name)
   local cmd
   cmd = function(any, extra)
-    debug("command[" .. tostring(name) .. "] started")
+    debug("command[" .. tostring(external_name) .. "] started")
     if extra then
       fn(any, unpack((function()
         local _accum_0 = { }
@@ -668,9 +783,9 @@ registerCommand = function(name, fn, cb)
     else
       fn(any)
     end
-    return debug("command[" .. tostring(name) .. "] completed")
+    return debug("command[" .. tostring(external_name) .. "] completed")
   end
-  return cfg.MakeCommand(name, cmd, cb)
+  return cfg.MakeCommand(external_name, cmd, cb)
 end
 init = function()
   debug("Initializing " .. tostring(NAME))
@@ -682,16 +797,17 @@ init = function()
       app.TermMessage(tostring(NAME) .. ": git not present in $PATH or set, some functionality will not work correctly")
     end
   end
-  registerCommand("git.init", git.init, cfg.NoComplete)
-  registerCommand("git.pull", git.pull, cfg.NoComplete)
-  registerCommand("git.push", git.push, cfg.NoComplete)
-  registerCommand("git.list", git.listbranches, cfg.NoComplete)
-  registerCommand("git.log", git.log, cfg.NoComplete)
-  registerCommand("git.commit", git.commit, cfg.NoComplete)
-  registerCommand("git.status", git.status, cfg.NoComplete)
-  registerCommand("git.checkout", git.checkout, cfg.NoComplete)
-  registerCommand("git.add", git.add, cfg.NoComplete)
-  return registerCommand("git.rm", git.rm, cfg.NoComplete)
+  registerCommand("init", git.init, cfg.NoComplete)
+  registerCommand("pull", git.pull, cfg.NoComplete)
+  registerCommand("push", git.push, cfg.NoComplete)
+  registerCommand("list", git.list, cfg.NoComplete)
+  registerCommand("log", git.log, cfg.NoComplete)
+  registerCommand("commit", git.commit, cfg.NoComplete)
+  registerCommand("status", git.status, cfg.NoComplete)
+  registerCommand("checkout", git.checkout, cfg.NoComplete)
+  registerCommand("stage", git.stage, cfg.NoComplete)
+  registerCommand("unstage", git.unstage, cfg.NoComplete)
+  return registerCommand("rm", git.rm, cfg.NoComplete)
 end
 preinit = function()
   debug("Clearing stale commit files ...")

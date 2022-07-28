@@ -332,7 +332,7 @@ git = (->
       (app.InfoBar!)\Message "git-#{cmd}: #{msg}"
       return
 
-  return {  
+  return {    
     init: =>
       cmd, err = new_command @Buf.Path
       unless cmd
@@ -343,7 +343,12 @@ git = (->
       out, err = cmd.exec "init"
       return send.init err if err
       send.init out
-
+      
+    init_help: [[
+      usage: %pub%.init
+        Initialize a repository in the current panes directory
+    ]]
+    
     fetch: =>
       cmd, err = new_command @Buf.Path
       unless cmd
@@ -353,6 +358,11 @@ git = (->
       out, err = cmd.exec "fetch"
       return send.fetch err if err
       send.fetch out
+
+    fetch_help: [[
+      usage: %pub%.fetch
+        Fetch latest changes from remotes
+    ]]
 
     checkout: (->
       re_valid_label = regexp.MustCompile"^[a-zA-Z-_/.]+$"
@@ -379,8 +389,13 @@ git = (->
         send.checkout out
     )!
 
+    checkout_help: [[
+      usage: %pub%.help <label>
+        Checkout a specific branch, tag, or revision
+    ]]
+
     --- List all of the branches in the current repository
-    listbranches: =>
+    list: =>
       cmd, err = new_command @Buf.Path
       unless cmd
         return send.list err
@@ -404,6 +419,12 @@ git = (->
         output ..= "#{branch.name} - rev:#{branch.commit}\n"
 
       return send.list_branches output
+
+    list_help: [[
+      usage: %pub%.list
+        List branches, and note the currently active branch
+    ]]
+
       
     status: =>
       cmd, err = new_command @Buf.Path
@@ -416,6 +437,11 @@ git = (->
       status_out, err = cmd.exec "status"
       return send.status err if err
       send.status status_out
+
+    status_help: [[
+      usage: %pub%.status
+        Show current status of the active repo
+    ]]
     
     --- Create a new git-branch and switch to it
     branch: (->
@@ -454,6 +480,13 @@ git = (->
 
         send.branch out
     )!
+
+    branch_help: [[
+      usage: %pub%.branch <label>
+        Create a new local branch, and switch to it
+
+        Note: Performs a git-fetch prior to making any changes.
+    ]]
 
     --- Commit changes to the current branch
     commit: (->    
@@ -510,6 +543,13 @@ git = (->
         return
     )!
 
+    commit_help: [[
+      usage: %pub%.commit [<commit message>]
+        Begin a new commit. If a commit message is not provided, opens a new
+        pane to enter the desired message into. Commit is initiated when the
+        pane is saved and then closed.
+    ]]
+
     --- Push local changes for branch (or all, if none specified) to remotes
     push: (->    
       re_valid_label = regexp.MustCompile"^[a-zA-Z-_/.]+$"
@@ -533,6 +573,13 @@ git = (->
         return
     )!
 
+    push_help: [[
+      usage: %pub%.push [<label>]
+        Push local changes onto remote. A branch label is optional, and limits
+        the scope of the push to the provided branch. Otherwise, all changes
+        are pushed.
+    ]]
+
     --- Pull changes from remotes into local
     pull: =>
       cmd, err = new_command @Buf.Path
@@ -545,6 +592,11 @@ git = (->
       pull_out, err = cmd.exec "pull"
       return send.pull err if err
       send.pull pull_out
+
+    pull_help: [[
+      usage: %pub%.pull
+        Pull all changes from remote into the working tree
+    ]]
 
     --- Show git commit log
     log: =>
@@ -565,31 +617,79 @@ git = (->
         header: "#{count} #{w_commit count}"
       }
 
-    add: (...) =>
+    log_help: [[
+      usage: %pub%.log
+        Show the commit log
+    ]]
+
+    stage: (...) =>
       cmd, err = new_command @Buf.Path
       unless cmd
-        return send.add err
+        return send.stage err
 
       unless cmd.in_repo!
-        return send.add errors.not_a_repo
+        return send.stage errors.not_a_repo
       
       files = {}
       for file in *{...}
-        if file == "."
+        continue if file == ".."
+        if file == "--all"
           files = { "." }
           break
 
         unless path_exists file
-          return send.add errors.invalid_arg .. "(file #{file} doesn't exist)"
+          return send.stage errors.invalid_arg .. "(file #{file} doesn't exist)"
 
         table.insert files, file
 
       unless #files > 0
-        return send.add errors.not_enough_args .. ", please supply a file"
+        return send.stage errors.not_enough_args .. ", please supply a file"
 
       cmd.exec "add", unpack files
 
+    stage_help: [[
+      usage: %pub%.stage [<file1>, <file2>, ...] [<options>]
+        Stage a file (or files) to commit.
+
+        Options:
+          --all   Stage all files
+    ]]
+
+    unstage: (...) =>
+      cmd, err = new_command @Buf.Path
+      unless cmd
+        return send.unstage err
+
+      unless cmd.in_repo!
+        return send.unstage errors.not_a_repo
       
+      files = {}
+      all = false
+      for file in *{...}
+        continue if file == ".."
+        if file == "--all"
+          files = {}
+          all = true
+          break
+
+        unless path_exists file
+          return send.unstage errors.invalid_arg .. "(file #{file} doesn't exist)"
+
+        table.insert files, file
+
+      unless (#files > 0) or all
+        return send.unstage errors.not_enough_args .. ", please supply a file"
+
+      cmd.exec "reset", "--", unpack files
+
+    unstage_help: [[
+      usage: %pub%.unstage [<file1>, <file2>, ...] [<options>]
+        Unstage a file (or files) to commit.
+
+        Options:
+          --all   Unstage all files
+    ]]
+
     rm: (...) =>
       cmd, err = new_command @Buf.Path
       unless cmd
@@ -600,6 +700,7 @@ git = (->
     
       files = {}
       for file in *{...}
+        continue if file == ".."
         if file == "."
           files = { "." }
           break
@@ -613,6 +714,11 @@ git = (->
         return send.rm errors.not_enough_args .. ", please supply a file"
 
       cmd.exec "rm", unpack files
+
+    rm_help: [[
+      usage: %pub%.rm [<file1>, <file2>, ...]
+        Stage the removal of a file (or files) from the git repo.
+    ]]
   }
 )!
 
@@ -625,15 +731,16 @@ cfg.RegisterCommonOption "git", "status_line", true
 -- Wraps the given function to account for Micros handling of arguments placing
 -- additional arguments of len size > 1 in a Go array
 registerCommand = (name, fn, cb) ->
+  external_name = "git.#{name}"
   cmd = (any, extra) ->
-    debug "command[#{name}] started"
+    debug "command[#{external_name}] started"
     if extra
       fn any, unpack([a for a in *extra])
     else
       fn any
-    debug "command[#{name}] completed"
+    debug "command[#{external_name}] completed"
 
-  cfg.MakeCommand name, cmd, cb
+  cfg.MakeCommand external_name, cmd, cb
 
 export init = ->
   debug "Initializing #{NAME}"
@@ -644,16 +751,17 @@ export init = ->
     if cmd == '' or not cmd
       app.TermMessage "#{NAME}: git not present in $PATH or set, some functionality will not work correctly"
 
-  registerCommand "git.init", git.init, cfg.NoComplete
-  registerCommand "git.pull", git.pull, cfg.NoComplete
-  registerCommand "git.push", git.push, cfg.NoComplete
-  registerCommand "git.list", git.listbranches, cfg.NoComplete
-  registerCommand "git.log", git.log, cfg.NoComplete
-  registerCommand "git.commit", git.commit, cfg.NoComplete
-  registerCommand "git.status", git.status, cfg.NoComplete
-  registerCommand "git.checkout", git.checkout, cfg.NoComplete
-  registerCommand "git.add", git.add, cfg.NoComplete
-  registerCommand "git.rm", git.rm, cfg.NoComplete
+  registerCommand "init", git.init, cfg.NoComplete
+  registerCommand "pull", git.pull, cfg.NoComplete
+  registerCommand "push", git.push, cfg.NoComplete
+  registerCommand "list", git.list, cfg.NoComplete
+  registerCommand "log", git.log, cfg.NoComplete
+  registerCommand "commit", git.commit, cfg.NoComplete
+  registerCommand "status", git.status, cfg.NoComplete
+  registerCommand "checkout", git.checkout, cfg.NoComplete
+  registerCommand "stage", git.stage, cfg.NoComplete
+  registerCommand "unstage", git.unstage, cfg.NoComplete
+  registerCommand "rm", git.rm, cfg.NoComplete
 
 export preinit = ->
   debug "Clearing stale commit files ..."

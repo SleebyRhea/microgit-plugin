@@ -1,4 +1,5 @@
-# Git for Micro
+# Microgit
+Git for Micro
 
 ## Commands
   - `git.init()`
