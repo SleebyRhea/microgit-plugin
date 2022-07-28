@@ -314,7 +314,9 @@ git = (->
 
     return { :new, :exec, :exec_async, :in_repo, :known_label, :get_branches }
 
-  --- Issue a message to the InfoBar with a neat syntax
+  --- Issue a message to the buffer with a neat syntax.
+  -- If a string has more than one line, use a pane. Otherwise, issue a message
+  -- via the infobar
   send = setmetatable {}, __index: (_, cmd) ->
     cmd = cmd\gsub "_", "-"
     (msg, config) ->
