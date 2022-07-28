@@ -1020,6 +1020,14 @@ onQuit = function(self)
       if commit.ready then
         debug("Commit " .. tostring(i) .. " is ready, fulfilling active commit ...")
         commit.callback(commit.file)
+        for t, _temp in ipairs(active) do
+          if _temp == commit then
+            table.remove(active, t)
+            ACTIVE_COMMITS = active
+            break
+          end
+        end
+        break
       else
         if self.Buf:Modified() then
           local info = app.InfoBar()
@@ -1028,38 +1036,31 @@ onQuit = function(self)
             info.YNCallback = function() end
             info:AbortCommand()
           end
-          local cancel = false
           info:YNPrompt("Would you like to save and commit? (y,n,esc)", function(yes, cancelled)
             if cancelled then
-              cancel = true
               return 
             end
             if yes then
               self.Buf:Save()
               self:ForceQuit()
               commit.callback(commit.file)
+              debug("Removing " .. tostring(commit.file))
+              os.Remove(commit.file)
+              debug("Popping commit " .. tostring(i) .. " from stack")
+              for t, _temp in ipairs(ACTIVE_COMMITS) do
+                if _temp == commit then
+                  table.remove(ACTIVE_COMMITS, t)
+                  break
+                end
+              end
               return 
             else
               info:Message("Aborted commit (closed before saving)")
+              self:ForceQuit()
             end
-            self:ForceQuit()
           end)
-          if cancel then
-            return 
-          end
         end
       end
-      debug("Removing " .. tostring(commit.file))
-      os.Remove(commit.file)
-      debug("Popping commit " .. tostring(i) .. " from stack")
-      for t, _temp in ipairs(active) do
-        if _temp == commit then
-          table.remove(active, t)
-          ACTIVE_COMMITS = active
-          break
-        end
-      end
-      break
     end
   end
 end

@@ -672,7 +672,7 @@ git = (->
         pane is saved and then closed.
     ]]
 
-    push: (->    
+    push: (->
       re_valid_label = regexp.MustCompile"^[a-zA-Z-_/.]+$"
       
       return (branch) =>
@@ -969,6 +969,12 @@ export onQuit = =>
       if commit.ready
         debug "Commit #{i} is ready, fulfilling active commit ..."
         commit.callback commit.file
+        for t, _temp in ipairs active
+          if _temp == commit
+            table.remove active, t
+            ACTIVE_COMMITS = active
+            break
+        break
       else
         if @Buf\Modified!
           -- We need to override the current YNPrompt if it exists,
@@ -985,33 +991,25 @@ export onQuit = =>
             debug "Removing message: #{info.Message}"
             info.YNCallback = ->
             info\AbortCommand!
-
-          cancel = false
           
           info\YNPrompt "Would you like to save and commit? (y,n,esc)",
             (yes, cancelled) ->
               if cancelled
-                cancel = true
                 return
               if yes
                 @Buf\Save!
                 @ForceQuit!
                 commit.callback commit.file
+                debug "Removing #{commit.file}"
+                os.Remove commit.file
+                debug "Popping commit #{i} from stack"
+                for t, _temp in ipairs ACTIVE_COMMITS
+                  if _temp == commit
+                    table.remove ACTIVE_COMMITS, t
+                    break
+                    
                 return
               else
                 info\Message "Aborted commit (closed before saving)"
-              @ForceQuit!
+                @ForceQuit!
               return
-              
-          return if cancel
-
-      debug "Removing #{commit.file}"
-      os.Remove commit.file
-
-      debug "Popping commit #{i} from stack"
-      for t, _temp in ipairs active
-        if _temp == commit
-          table.remove active, t
-          ACTIVE_COMMITS = active
-          break
-      break
