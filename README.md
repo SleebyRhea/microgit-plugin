@@ -27,7 +27,9 @@ Adds a number of commands to make working with git repos within Micro a more sea
     - Commit changes to your local tree. If `str` is provided, it is used as the commit message. Otherwise, a buffer is opened for editting and the contents will be used instead
   - `git.status()`
     - Show current status of the repository
-  - `git.add(str...)`
-    - Stage one or more files. If `.` is provided, stage all files
+  - `git.stage(str...)`
+    - Stage one or more files. If `--all` is provided, stage all files
+  - `git.unstage(str...)`
+    - Unstage one or more files. If `--all` is provided, unstage all files
   - `git.rm`
     - Remove one or more files. If `.` is provided, remove all files
