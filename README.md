@@ -5,10 +5,26 @@ Git for Micro
 Adds a number of commands to make working with git repos within Micro a more seamless experience. Additionally, adds a git line to your panes statuslines showing your current branch, how many commits head/behind you are, and the number of staged files you have for that branch
 
 ## Options
-- `git.statusline`
-  - Control whether or not to display the status line
-- `git.command`
-  - The git command that you would like to use
+- `git.updateinfo (Boolean)` 
+  - Enable/Disable branch information tracking in Micro
+  - Note: This is required for the statusline functions to work properly
+- `git.command (string)`
+  - Path to the git command that you would like to use
+
+## Statusline
+This plugin exposes the following functions for statusline configurations:
+  - `microgit.numahead`
+    - Returns the number of commits ahead of your branches origin
+  - `microgit.numbehind`
+    - Returns the number of commits behind of your branches origin
+  - `microgit.numstaged`
+    - Returns the number of staged files in your branch
+  - `microgit.oncommit`
+    - Returns the current commit short hash
+  - `microgit.onbranch`
+    - Returns the current panes branch (if any)
+
+NOTE: In order to use the statusline functions, you MUST make sure the plugin directory name is `microgit` or Micro will not register the plugin correctly.
 
 ## Commands
   - `git.init()`

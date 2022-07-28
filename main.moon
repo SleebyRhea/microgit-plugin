@@ -29,7 +29,6 @@ LOADED_COMMANDS = {}
 BRANCH_STATUS = {}
 BUFFER_BRANCH = {}
 
--- TODO: Implement git statusline information
 cfg.RegisterCommonOption "git", "command", ""
 cfg.RegisterCommonOption "git", "statusline", true
 cfg.RegisterCommonOption "git", "updateinfo", true
@@ -831,7 +830,12 @@ registerCommand = (name, fn, cb) ->
     else
       fn any
     debug "command[#{external_name}] completed"
-    git.update_branch_status any
+
+    if any and any.Buf then
+      git.update_branch_status any.Buf
+    elseif any.Path
+      git.update_branch_status any
+    
     return
 
   cfg.MakeCommand external_name, cmd, cb
@@ -908,6 +912,7 @@ export onBufPaneOpen = =>
   git.update_branch_status @Buf
   
 export onSave = =>
+  debug "Caught onSave bufpane:#{self}"
   git.update_branch_status @Buf
   return unless #ACTIVE_COMMITS > 0
 

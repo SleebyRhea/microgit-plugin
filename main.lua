@@ -907,7 +907,11 @@ registerCommand = function(name, fn, cb)
       fn(any)
     end
     debug("command[" .. tostring(external_name) .. "] completed")
-    git.update_branch_status(any)
+    if any and any.Buf then
+      git.update_branch_status(any.Buf)
+    elseif any.Path then
+      git.update_branch_status(any)
+    end
   end
   cfg.MakeCommand(external_name, cmd, cb)
   LOADED_COMMANDS[name] = {
@@ -1005,6 +1009,7 @@ onBufPaneOpen = function(self)
   return git.update_branch_status(self.Buf)
 end
 onSave = function(self)
+  debug("Caught onSave bufpane:" .. tostring(self))
   git.update_branch_status(self.Buf)
   if not (#ACTIVE_COMMITS > 0) then
     return 
