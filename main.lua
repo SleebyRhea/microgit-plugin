@@ -318,7 +318,7 @@ git = (function()
     end
     local known_label
     known_label = function(label)
-      local out, err = exec("rev-parse", label)
+      local out, err = exec("rev-parse", "--quiet", "--verify", label)
       if err and err ~= "" then
         return false
       end

@@ -323,7 +323,7 @@ git = (->
       return branches, current
 
     known_label = (label) ->
-      out, err = exec "rev-parse", label
+      out, err = exec "rev-parse", "--quiet", "--verify", label
       if err and err != ""
         return false
       return chomp out
