@@ -21,8 +21,11 @@ local regexp = go.import("regexp")
 local runtime = go.import("runtime")
 local ACTIVE_COMMITS = { }
 local LOADED_COMMANDS = { }
+local BRANCH_STATUS = { }
+local BUFFER_BRANCH = { }
 cfg.RegisterCommonOption("git", "command", "")
 cfg.RegisterCommonOption("git", "statusline", true)
+cfg.RegisterCommonOption("git", "updateinfo", true)
 local errors = {
   is_a_repo = "the current directory is already a repository",
   not_a_repo = "the current directory is not a repository",
@@ -41,16 +44,6 @@ local chomp
 chomp = function(s)
   s = s:gsub("^%s*", ""):gsub("%s*$", ""):gsub("[\n\r]*$", "")
   return s
-end
-local numeric
-numeric = function(...)
-  local rets = { }
-  local _list_0 = { }
-  for _index_0 = 1, #_list_0 do
-    local a = _list_0[_index_0]
-    table.insert(rets, tonumber(a))
-  end
-  return unpack(rets)
 end
 local wordify
 wordify = function(word, singular, plural)
@@ -380,58 +373,73 @@ git = (function()
     line = " " .. tostring(line) .. tostring(branch) .. " ↑" .. tostring(ch_upstream) .. " ↓" .. tostring(ch_local) .. " ↓↑" .. tostring(staged) .. " | commit:" .. tostring(commit)
     return line
   end
-  local update_git_line
-  update_git_line = function(self, cmd)
+  local update_branch_status
+  update_branch_status = function(self, cmd)
+    debug("update_branch_status: Update initiated")
+    if not (self.Path) then
+      debug("update_branch_status: was called with a non-buffer object!")
+      return 
+    end
     if not (cfg.GetGlobalOption("git.statusline")) then
       return 
     end
-    if not ((not self.Buf.Type.Scratch) and (self.Buf.Path ~= '')) then
+    if not (cfg.GetGlobalOption("git.updateinfo")) then
       return 
     end
+    if not ((not self.Type.Scratch) and (self.Path ~= '')) then
+      return 
+    end
+    debug("update_branch_status: Beginning update process for " .. tostring(self))
     if not (cmd) then
       local err
-      cmd, err = new_command(self.Buf.Path)
+      cmd, err = new_command(self.Path)
       if not (cmd) then
-        return send.statusline((err .. " (to suppress this message, set git.statusline to false)"))
+        return send.updater((err .. " (to suppress this message, set git.statusline to false)"))
       end
     end
-    if not (cmd.in_repo()) then
-      return 
-    end
-    local branch, revision = nil, nil
-    debug("Getting branch label ...")
+    local branch
+    debug("update_branch_status: Getting branch label ...")
     local out, err = cmd.exec("branch", "--show-current")
     if not (err) then
       branch = chomp(out)
+    else
+      return 
     end
-    debug("Getting HEAD short hash ...")
-    out, err = cmd.exec("rev-parse", "--short", "HEAD")
+    BUFFER_BRANCH[self.Path] = branch
+    BRANCH_STATUS[branch] = {
+      name = (branch or ''),
+      ahead = "-",
+      behind = "-",
+      staged = "-",
+      commit = commit
+    }
+    if not (branch) then
+      return 
+    end
+    debug("update_branch_status: Getting HEAD short hash ...")
+    out, err = cmd.exec("rev-parse", "--short", branch)
     if not (err) then
-      revision = chomp(out)
+      BRANCH_STATUS[branch].commit = chomp(out)
     end
-    local liner = tostring(cfg.GetGlobalOption("statusliner"))
-    if liner == 'nil' or liner == nil then
-      liner = ''
-    end
-    local ahead, behind, staged = 0, 0, 0
     if branch then
-      debug("Getting revision count differences")
+      debug("update_branch_status: Getting revision count differences")
       out, err = cmd.exec("rev-list", "--left-right", "--count", "origin/" .. tostring(branch) .. "..." .. tostring(branch))
       if not (err) then
-        ahead, behind = numeric((chomp(out)):match("([%d]+)"))
+        local a, b = (chomp(out)):match("^(%d+)%s+(%d+)$")
+        BRANCH_STATUS[branch].ahead = a or "-"
+        BRANCH_STATUS[branch].behind = b or "-"
       end
     end
-    debug("Getting staged count")
+    debug("update_branch_status: Getting staged count")
     out, err = cmd.exec("diff", "--name-only", "--cached")
     if not (err) then
-      staged = select(2, (chomp(out)):gsub("([^%s\r\n]+)", ''))
+      local staged = select(2, (chomp(out)):gsub("([^%s\r\n]+)", ''))
+      BRANCH_STATUS[branch].staged = staged
     end
-    debug("Forming new git-line")
-    local line = form_git_line(liner, branch, revision, ahead, behind, staged)
-    return self.Buf:SetOptionNative("statusformatr", line)
+    return debug("update_branch_status: Done")
   end
   return {
-    update_git_line = update_git_line,
+    update_branch_status = update_branch_status,
     help = function(self, command)
       if not (LOADED_COMMANDS[command]) then
         return send.help(errors.command_not_found)
@@ -899,7 +907,7 @@ registerCommand = function(name, fn, cb)
       fn(any)
     end
     debug("command[" .. tostring(external_name) .. "] completed")
-    git.update_git_line(any)
+    git.update_branch_status(any)
   end
   cfg.MakeCommand(external_name, cmd, cb)
   LOADED_COMMANDS[name] = {
@@ -907,6 +915,50 @@ registerCommand = function(name, fn, cb)
     help = git[name .. "_help"]
   }
 end
+numahead = function(self)
+  if not (BUFFER_BRANCH[self.Path]) then
+    return "-"
+  end
+  if not (BRANCH_STATUS[BUFFER_BRANCH[self.Path]]) then
+    return "-"
+  end
+  return tostring(BRANCH_STATUS[BUFFER_BRANCH[self.Path]].ahead)
+end
+numbehind = function(self)
+  if not (BUFFER_BRANCH[self.Path]) then
+    return "-"
+  end
+  if not (BRANCH_STATUS[BUFFER_BRANCH[self.Path]]) then
+    return "-"
+  end
+  return tostring(BRANCH_STATUS[BUFFER_BRANCH[self.Path]].behind)
+end
+numstaged = function(self)
+  if not (BUFFER_BRANCH[self.Path]) then
+    return "-"
+  end
+  if not (BRANCH_STATUS[BUFFER_BRANCH[self.Path]]) then
+    return "-"
+  end
+  return tostring(BRANCH_STATUS[BUFFER_BRANCH[self.Path]].staged)
+end
+oncommit = function(self)
+  if not (BUFFER_BRANCH[self.Path]) then
+    return "-"
+  end
+  if not (BRANCH_STATUS[BUFFER_BRANCH[self.Path]]) then
+    return "-"
+  end
+  return tostring(BRANCH_STATUS[BUFFER_BRANCH[self.Path]].commit)
+end
+onbranch = function(self)
+  return tostring(BUFFER_BRANCH[self.Path] or "")
+end
+app.SetStatusInfoFn(tostring(NAME) .. ".numahead")
+app.SetStatusInfoFn(tostring(NAME) .. ".numbehind")
+app.SetStatusInfoFn(tostring(NAME) .. ".numstaged")
+app.SetStatusInfoFn(tostring(NAME) .. ".onbranch")
+app.SetStatusInfoFn(tostring(NAME) .. ".oncommit")
 preinit = function()
   debug("Clearing stale commit files ...")
   local pfx = tostring(NAME) .. ".commit."
@@ -950,10 +1002,10 @@ init = function()
 end
 onBufPaneOpen = function(self)
   debug("Caught onBufPaneOpen bufpane:" .. tostring(self))
-  return git.update_git_line(self)
+  return git.update_branch_status(self.Buf)
 end
 onSave = function(self)
-  git.update_git_line(self)
+  git.update_branch_status(self.Buf)
   if not (#ACTIVE_COMMITS > 0) then
     return 
   end
@@ -967,6 +1019,9 @@ onSave = function(self)
 end
 onQuit = function(self)
   debug("Caught onQuit, buf:" .. tostring(self))
+  if self.Path and BUFFER_BRANCH[self.Path] then
+    BUFFER_BRANCH[self.Path] = nil
+  end
   if not (#ACTIVE_COMMITS > 0) then
     return 
   end

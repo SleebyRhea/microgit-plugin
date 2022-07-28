@@ -26,10 +26,13 @@ runtime = go.import"runtime"
 
 ACTIVE_COMMITS = {}
 LOADED_COMMANDS = {}
+BRANCH_STATUS = {}
+BUFFER_BRANCH = {}
 
 -- TODO: Implement git statusline information
 cfg.RegisterCommonOption "git", "command", ""
 cfg.RegisterCommonOption "git", "statusline", true
+cfg.RegisterCommonOption "git", "updateinfo", true
 
 errors =
   is_a_repo: "the current directory is already a repository"
@@ -48,13 +51,6 @@ debug = (m) ->
 chomp = (s) ->
   s = s\gsub("^%s*", "")\gsub("%s*$", "")\gsub("[\n\r]*$", "")
   return s
-
---- Attempt to convert every input into a number
-numeric = (...) ->
-  rets = {}
-  for a in *{}
-    table.insert rets, tonumber(a)
-  return unpack rets
 
 --- Generate a function that takes a number, and returns the correct plurality of a word
 wordify = (word, singular, plural) ->
@@ -357,50 +353,66 @@ git = (->
     line = " #{line}#{branch} ↑#{ch_upstream} ↓#{ch_local} ↓↑#{staged} | commit:#{commit}"
     return line
 
-  update_git_line = (cmd) =>
-    return unless cfg.GetGlobalOption "git.statusline"
-    return unless (not @Buf.Type.Scratch) and (@Buf.Path != '')
+  update_branch_status = (cmd) =>
+    debug "update_branch_status: Update initiated"
+
+    unless @Path
+      debug "update_branch_status: was called with a non-buffer object!"
+      return
     
+    return unless cfg.GetGlobalOption "git.statusline"
+    return unless cfg.GetGlobalOption "git.updateinfo"
+    return unless (not @Type.Scratch) and (@Path != '')
+    
+    debug "update_branch_status: Beginning update process for #{self}"
+
     unless cmd
-      cmd, err = new_command @Buf.Path
-      return send.statusline (err .. " (to suppress this message, set git.statusline to false)") unless cmd
-      
-    return unless cmd.in_repo!
+      cmd, err = new_command @Path
+      return send.updater (err .. " (to suppress this message, set git.statusline to false)") unless cmd    
 
-    branch, revision = nil, nil
+    local branch
 
-    debug "Getting branch label ..."
+    debug "update_branch_status: Getting branch label ..."
     out, err = cmd.exec "branch", "--show-current"
     unless err
       branch = chomp out
+    else
+      return
 
-    debug "Getting HEAD short hash ..."
-    out, err = cmd.exec "rev-parse", "--short", "HEAD"
+    BUFFER_BRANCH[@Path] = branch
+    BRANCH_STATUS[branch] = { 
+      name: (branch or '')
+      ahead: "-"
+      behind: "-"
+      staged: "-"
+      :commit
+    }
+
+    return unless branch
+
+    debug "update_branch_status: Getting HEAD short hash ..."
+    out, err = cmd.exec "rev-parse", "--short", branch
     unless err
-      revision = chomp out
-      
-    liner = tostring cfg.GetGlobalOption"statusliner"
-    if liner == 'nil' or liner == nil
-      liner = ''
+      BRANCH_STATUS[branch].commit = chomp out
 
-    ahead, behind, staged = 0, 0, 0
     if branch
-      debug "Getting revision count differences"
+      debug "update_branch_status: Getting revision count differences"
       out, err = cmd.exec "rev-list", "--left-right", "--count", "origin/#{branch}...#{branch}"
       unless err
-        ahead, behind = numeric (chomp out)\match("([%d]+)")
+        a, b = (chomp out)\match("^(%d+)%s+(%d+)$")
+        BRANCH_STATUS[branch].ahead = a or "-"
+        BRANCH_STATUS[branch].behind = b or "-"
 
-    debug "Getting staged count"
+    debug "update_branch_status: Getting staged count"
     out, err = cmd.exec "diff", "--name-only", "--cached"
     unless err
       staged = select(2, (chomp out)\gsub("([^%s\r\n]+)", ''))
+      BRANCH_STATUS[branch].staged = staged
 
-    debug "Forming new git-line"
-    line = form_git_line liner, branch, revision, ahead, behind, staged
-    @Buf\SetOptionNative "statusformatr", line
+    debug "update_branch_status: Done"
 
   return {
-    :update_git_line
+    :update_branch_status
   
     help: (command) =>
       unless LOADED_COMMANDS[command]
@@ -819,11 +831,40 @@ registerCommand = (name, fn, cb) ->
     else
       fn any
     debug "command[#{external_name}] completed"
-    git.update_git_line any
+    git.update_branch_status any
     return
 
   cfg.MakeCommand external_name, cmd, cb
   LOADED_COMMANDS[name] = { :cmd, help: git[name .. "_help"] }
+
+export numahead = =>
+  return "-" unless BUFFER_BRANCH[@Path]
+  return "-" unless BRANCH_STATUS[BUFFER_BRANCH[@Path]]
+  return tostring BRANCH_STATUS[BUFFER_BRANCH[@Path]].ahead
+
+export numbehind = =>
+  return "-" unless BUFFER_BRANCH[@Path]
+  return "-" unless BRANCH_STATUS[BUFFER_BRANCH[@Path]]
+  return tostring BRANCH_STATUS[BUFFER_BRANCH[@Path]].behind
+
+export numstaged = =>
+  return "-" unless BUFFER_BRANCH[@Path]
+  return "-" unless BRANCH_STATUS[BUFFER_BRANCH[@Path]]
+  return tostring BRANCH_STATUS[BUFFER_BRANCH[@Path]].staged
+
+export oncommit = =>
+  return "-" unless BUFFER_BRANCH[@Path]
+  return "-" unless BRANCH_STATUS[BUFFER_BRANCH[@Path]]
+  return tostring BRANCH_STATUS[BUFFER_BRANCH[@Path]].commit
+
+export onbranch = =>
+  return tostring(BUFFER_BRANCH[@Path] or "")
+
+app.SetStatusInfoFn "#{NAME}.numahead"
+app.SetStatusInfoFn "#{NAME}.numbehind"
+app.SetStatusInfoFn "#{NAME}.numstaged"
+app.SetStatusInfoFn "#{NAME}.onbranch"
+app.SetStatusInfoFn "#{NAME}.oncommit"
 
 export preinit = ->
   debug "Clearing stale commit files ..."
@@ -864,10 +905,10 @@ export init = ->
 
 export onBufPaneOpen = =>
   debug "Caught onBufPaneOpen bufpane:#{self}"
-  git.update_git_line self
+  git.update_branch_status @Buf
   
 export onSave = =>
-  git.update_git_line self
+  git.update_branch_status @Buf
   return unless #ACTIVE_COMMITS > 0
 
   for i, commit in ipairs ACTIVE_COMMITS
@@ -878,6 +919,10 @@ export onSave = =>
       
 export onQuit = =>
   debug "Caught onQuit, buf:#{@}"
+
+  if @Path and BUFFER_BRANCH[@Path]
+    BUFFER_BRANCH[@Path] = nil
+    
   return unless #ACTIVE_COMMITS > 0
 
   debug "Populating temporary table for active commits ..."
