@@ -112,14 +112,14 @@ local send_block = (function()
   end
 end)()
 local make_commit_pane
-make_commit_pane = function(output, header, fn)
-  local old_view = (app.CurPane()):GetView()
+make_commit_pane = function(root, output, header, fn)
+  local old_view = root:GetView()
   local h = old_view.Height
   local filepath = make_temp()
   debug("Populating temporary commit file " .. tostring(filepath) .. " ...")
   ioutil.WriteFile(filepath, output, 0x1B0)
   debug("Generating new buffer for " .. tostring(filepath))
-  local commit_pane = (app.CurPane()):HSplitIndex(buf.NewBuffer(output, filepath), true)
+  local commit_pane = (app.CurPane()):HSplitIndex(buf.NewBuffer("", filepath), true)
   commit_pane:ResizePane(h - (h / 3))
   commit_pane.Buf.Type.Scratch = false
   commit_pane.Buf.Type.Readonly = false
@@ -131,14 +131,16 @@ make_commit_pane = function(output, header, fn)
   commit_pane.Buf:SetOptionNative("statusformatl", header)
   commit_pane.Buf:SetOptionNative("scrollbar", false)
   commit_pane.Buf:SetOptionNative("", false)
+  commit_pane.Buf.EventHandler:Insert(buf.Loc(0, 0), output)
   commit_pane.Cursor.Loc.Y = 0
   commit_pane.Cursor.Loc.X = 0
   commit_pane.Cursor:Relocate()
   return table.insert(ACTIVE_COMMITS, {
     callback = fn,
-    buffer = commit_pane,
+    pane = commit_pane,
     file = filepath,
-    done = ready
+    done = ready,
+    root = root
   })
 end
 local git
@@ -186,9 +188,6 @@ git = (function()
       return nil, "Please run this in an editor pane"
     end
     local abs, dir, name = get_path_info(filepath)
-    debug("Abs " .. tostring(filepath) .. ": " .. tostring(abs))
-    debug("Dir " .. tostring(filepath) .. ": " .. tostring(dir))
-    debug("Name " .. tostring(filepath) .. ": " .. tostring(name))
     local exec
     exec = function(...)
       if not (path_exists(dir)) then
@@ -273,18 +272,6 @@ git = (function()
       end
     end
   })
-  onSave = function(self)
-    if not (#ACTIVE_COMMITS > 0) then
-      return 
-    end
-    for i, commit in ipairs(ACTIVE_COMMITS) do
-      if commit.buffer == self then
-        debug("Marking commit " .. tostring(i) .. " as ready ...")
-        commit.ready = true
-        break
-      end
-    end
-  end
   return {
     init = function(self)
       local cmd, err = new_command(self.Buf.Path)
@@ -447,7 +434,7 @@ git = (function()
           commit_msg_start = commit_msg_start .. "# " .. tostring(line) .. "\n"
         end)
         local header = "[new commit: save and quit to finalize]"
-        make_commit_pane(commit_msg_start, header, function(file, _)
+        make_commit_pane(self, commit_msg_start, header, function(file, _)
           local commit_msg = ioutil.ReadFile(file)
           commit_msg = str.TrimSuffix(commit_msg, commit_msg_start)
           if commit_msg == "" then
@@ -666,8 +653,19 @@ preinit = function()
     end
   end
 end
+onSave = function(self)
+  if not (#ACTIVE_COMMITS > 0) then
+    return 
+  end
+  for i, commit in ipairs(ACTIVE_COMMITS) do
+    if commit.pane == self then
+      debug("Marking commit " .. tostring(i) .. " as ready ...")
+      commit.ready = true
+      break
+    end
+  end
+end
 onQuit = function(self)
-  local info = app.InfoBar()
   debug("Caught onQuit, buf:" .. tostring(self))
   if not (#ACTIVE_COMMITS > 0) then
     return 
@@ -686,13 +684,15 @@ onQuit = function(self)
   end
   debug("Iterating through known commits ...")
   for i, commit in ipairs(ACTIVE_COMMITS) do
-    if commit.buffer == self then
+    if commit.pane == self then
       if commit.ready then
         debug("Commit " .. tostring(i) .. " is ready, fulfilling active commit ...")
         commit.callback(commit.file)
       else
         if self.Buf.modified then
+          local info = app.InfoBar()
           if info.HasYN and info.HasPrompt then
+            debug("Removing message: " .. tostring(info.Message))
             info.YNCallback = function() end
             info:AbortCommand()
           end

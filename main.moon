@@ -120,8 +120,8 @@ send_block = (->
     send_pane.Cursor\Relocate!
 )!
 
-make_commit_pane = (output, header, fn) ->
-  old_view = (app.CurPane!)\GetView!
+make_commit_pane = (root, output, header, fn) ->
+  old_view = root\GetView!
   h = old_view.Height
 
   filepath = make_temp!
@@ -133,7 +133,7 @@ make_commit_pane = (output, header, fn) ->
   -- makes and then dumps the output string into its buffer
   -- Follow this by setting the cursor to 0,0 to move to the top
   debug "Generating new buffer for #{filepath}"
-  commit_pane = (app.CurPane!)\HSplitIndex(buf.NewBuffer(output, filepath), true)
+  commit_pane = (app.CurPane!)\HSplitIndex(buf.NewBuffer("", filepath), true)
   commit_pane\ResizePane h - (h / 3)
   commit_pane.Buf.Type.Scratch = false
   commit_pane.Buf.Type.Readonly = false
@@ -145,15 +145,17 @@ make_commit_pane = (output, header, fn) ->
   commit_pane.Buf\SetOptionNative "statusformatl", header
   commit_pane.Buf\SetOptionNative "scrollbar", false
   commit_pane.Buf\SetOptionNative "", false
+  commit_pane.Buf.EventHandler\Insert buf.Loc(0, 0), output
   commit_pane.Cursor.Loc.Y = 0
   commit_pane.Cursor.Loc.X = 0
   commit_pane.Cursor\Relocate!
 
   table.insert ACTIVE_COMMITS, {
     callback: fn
-    buffer: commit_pane
+    pane: commit_pane
     file: filepath
     done: ready
+    root: root
   }
 
 local git
@@ -207,9 +209,6 @@ git = (->
       return nil, "Please run this in an editor pane"
 
     abs, dir, name = get_path_info filepath
-    debug "Abs #{filepath}: #{abs}"
-    debug "Dir #{filepath}: #{dir}"
-    debug "Name #{filepath}: #{name}"
    
     exec = (...) ->
       unless path_exists dir
@@ -279,15 +278,6 @@ git = (->
 
       (app.InfoBar!)\Message "git-#{cmd}: #{msg}"
       return
-
-  export onSave = =>
-    return unless #ACTIVE_COMMITS > 0
-
-    for i, commit in ipairs ACTIVE_COMMITS
-      if commit.buffer == @
-        debug "Marking commit #{i} as ready ..."
-        commit.ready = true
-        break
 
   return {  
     init: =>
@@ -439,7 +429,7 @@ git = (->
           
         header = "[new commit: save and quit to finalize]"
         
-        make_commit_pane commit_msg_start, header, (file, _) ->
+        make_commit_pane self, commit_msg_start, header, (file, _) ->
           commit_msg = ioutil.ReadFile file
           commit_msg = str.TrimSuffix commit_msg, commit_msg_start
           
@@ -626,9 +616,16 @@ export preinit = ->
         debug "Clearing #{filepath}"
         os.Remove filepath
 
-export onQuit = =>
-  info = app.InfoBar!
+export onSave = =>
+    return unless #ACTIVE_COMMITS > 0
 
+    for i, commit in ipairs ACTIVE_COMMITS
+      if commit.pane == @
+        debug "Marking commit #{i} as ready ..."
+        commit.ready = true
+        break
+
+export onQuit = =>
   debug "Caught onQuit, buf:#{@}"
   return unless #ACTIVE_COMMITS > 0
 
@@ -637,7 +634,7 @@ export onQuit = =>
 
   debug "Iterating through known commits ..."
   for i, commit in ipairs ACTIVE_COMMITS
-    if commit.buffer == @
+    if commit.pane == self
       if commit.ready
         debug "Commit #{i} is ready, fulfilling active commit ..."
         commit.callback commit.file
@@ -652,7 +649,9 @@ export onQuit = =>
           --       to cancel properly, but AbortCommand() does not call
           --       the InfoBar.YNPrompt() callback with true as the 2nd
           --       boolean (which it probably should)
+          info = app.InfoBar!
           if info.HasYN and info.HasPrompt
+            debug "Removing message: #{info.Message}"
             info.YNCallback = ->
             info\AbortCommand!
 
