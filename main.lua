@@ -645,6 +645,7 @@ init = function()
   registerCommand("git.log", git.log, cfg.NoComplete)
   registerCommand("git.commit", git.commit, cfg.NoComplete)
   registerCommand("git.status", git.status, cfg.NoComplete)
+  registerCommand("git.checkout", git.checkout, cfg.NoComplete)
   registerCommand("git.add", git.add, cfg.NoComplete)
   return registerCommand("git.rm", git.rm, cfg.NoComplete)
 end
