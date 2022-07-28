@@ -324,8 +324,8 @@ git = (->
 
     known_label = (label) ->
       out, err = exec "rev-parse", "--quiet", "--verify", label
-      if (err and err != "") or (out and out != "")
-        return false
+      unless (err and err != "") or (out and out != "")
+        return false, err
       return chomp(out)
 
     return { :new, :exec, :exec_async, :in_repo, :known_label, :get_branches }
@@ -548,19 +548,19 @@ git = (->
         out = ''
         fetch_out, _ = cmd.exec "fetch"
         out ..= "> git fetch\n"
-        out ..= fetch_out
+        out ..= "#{fetch_out}"
 
         if rev = cmd.known_label label
           return send.branch errors.invalid_arg ..
             ", please supply an unused label (#{label} is rev:#{rev})"
 
         branch_out, err = cmd.exec "branch", label
-        out ..= "> git branch #{label}"
+        out ..= "> git branch #{label}\n"
         out ..= branch_out
 
         unless err
           chkout_out, _ = cmd.exec "checkout", label
-          out ..= "> git checkout #{label}"
+          out ..= "> git checkout #{label}\n"
           out ..= chkout_out
 
         send.branch out

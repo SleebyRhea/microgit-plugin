@@ -319,8 +319,8 @@ git = (function()
     local known_label
     known_label = function(label)
       local out, err = exec("rev-parse", "--quiet", "--verify", label)
-      if (err and err ~= "") or (out and out ~= "") then
-        return false
+      if not ((err and err ~= "") or (out and out ~= "")) then
+        return false, err
       end
       return chomp(out)
     end
@@ -578,7 +578,7 @@ git = (function()
         local out = ''
         local fetch_out, _ = cmd.exec("fetch")
         out = out .. "> git fetch\n"
-        out = out .. fetch_out
+        out = out .. tostring(fetch_out)
         do
           local rev = cmd.known_label(label)
           if rev then
@@ -587,12 +587,12 @@ git = (function()
         end
         local branch_out
         branch_out, err = cmd.exec("branch", label)
-        out = out .. "> git branch " .. tostring(label)
+        out = out .. "> git branch " .. tostring(label) .. "\n"
         out = out .. branch_out
         if not (err) then
           local chkout_out
           chkout_out, _ = cmd.exec("checkout", label)
-          out = out .. "> git checkout " .. tostring(label)
+          out = out .. "> git checkout " .. tostring(label) .. "\n"
           out = out .. chkout_out
         end
         return send.branch(out)
