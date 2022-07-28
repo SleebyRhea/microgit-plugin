@@ -179,7 +179,6 @@ local git
 local set_callbacks
 local bound
 bound = function(n, min, max)
-  debug("bound: got: " .. tostring(n))
   return n > max and max or (n < min and min or n)
 end
 local get_path_info = (function()
@@ -204,8 +203,6 @@ local get_path_info = (function()
     local abs = (pwd .. s .. _string)
     local split_path = re_part:Split(abs, -1)
     local l = #split_path
-    debug("get_path_info: bound: " .. tostring(bound(l - 1, 1, l)))
-    debug("get_path_info: Bound: " .. tostring(bound(l, 1, l)))
     return abs, pwd, split_path[bound(l, 1, l)]
   end
 end)()

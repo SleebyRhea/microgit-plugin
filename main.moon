@@ -49,6 +49,7 @@ chomp = (s) ->
   s = s\gsub("^%s*", "")\gsub("%s*$", "")\gsub("[\n\r]*$", "")
   return s
 
+--- Attempt to convert every input into a number
 numeric = (...) ->
   rets = {}
   for a in *{}
@@ -193,7 +194,6 @@ local git
 local set_callbacks
 
 bound = (n, min, max) ->
-  debug "bound: got: #{n}"
   n > max and max or (n < min and min or n)
 
 -- filepath.Abs and filepath.IsAbs both exist, however, their use in Lua code
@@ -224,8 +224,6 @@ get_path_info = (->
     split_path = re_part\Split abs, -1
     l = #split_path
     
-    debug "get_path_info: bound: #{bound(l-1, 1, l)}"
-    debug "get_path_info: Bound: #{bound(l, 1, l)}"
     return abs, pwd, split_path[bound(l, 1, l)]
 )!
 
