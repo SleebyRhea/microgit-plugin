@@ -11,6 +11,8 @@
     - List the local and remote branches, and show currently checkedout revision
   - `git.log()`
     - Show the commit log
+  - `git.checkout(str)`
+    - Checkout a specific label (tag/branch/revision)
   - `git.commit(str)`
     - Commit changes to your local tree. If `str` is provided, it is used as the commit message. Otherwise, a buffer is opened for editting and the contents will be used instead
   - `git.status()`
