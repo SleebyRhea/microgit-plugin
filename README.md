@@ -1,6 +1,15 @@
 # Microgit
 Git for Micro
 
+## About
+Adds a number of commands to make working with git repos within Micro a more seamless experience. Additionally, adds a git line to your panes statuslines showing your current branch, how many commits head/behind you are, and the number of staged files you have for that branch
+
+## Options
+- `git.statusline`
+  - Control whether or not to display the status line
+- `git.command`
+  - The git command that you would like to use
+
 ## Commands
   - `git.init()`
     - Initialize repository in current directory

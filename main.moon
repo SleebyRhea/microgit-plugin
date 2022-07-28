@@ -396,13 +396,7 @@ git = (->
     line = form_git_line liner, branch, revision, ahead, behind, staged
     @Buf\SetOptionNative "statusformatr", line
 
-  callbacks = 
-    onBufPaneOpen: =>    
-      debug "Caught onBufPaneOpen bufpane:#{self}"
-      update_git_line self
-
   return {
-    :callbacks
     :update_git_line
   
     help: (command) =>
@@ -832,6 +826,20 @@ registerCommand = (name, fn, cb) ->
   cfg.MakeCommand external_name, cmd, cb
   LOADED_COMMANDS[name] = { :cmd, help: git[name .. "_help"] }
 
+export preinit = ->
+  debug "Clearing stale commit files ..."
+  pfx = "#{NAME}.commit."
+  dir = path.Join "#{cfg.ConfigDir}", "tmp"
+
+  files, err = ioutil.ReadDir dir
+  unless err
+    for f in *files
+      debug "Does #{f\Name!} have the prefix #{pfx}?"
+      if str.HasPrefix f\Name!, pfx
+        filepath = path.Join dir, f\Name!
+        debug "Clearing #{filepath}"
+        os.Remove filepath
+
 export init = ->
   debug "Initializing #{NAME}"
 
@@ -854,34 +862,20 @@ export init = ->
   registerCommand "unstage", git.unstage, cfg.NoComplete
   registerCommand "rm", git.rm, cfg.NoComplete
 
-export onBufPaneOpen = git.callbacks.onBufPaneOpen
-
-export preinit = ->
-  debug "Clearing stale commit files ..."
-  pfx = "#{NAME}.commit."
-  dir = path.Join "#{cfg.ConfigDir}", "tmp"
-
-  files, err = ioutil.ReadDir dir
-  unless err
-    for f in *files
-      debug "Does #{f\Name!} have the prefix #{pfx}?"
-      if str.HasPrefix f\Name!, pfx
-        filepath = path.Join dir, f\Name!
-        debug "Clearing #{filepath}"
-        os.Remove filepath
-
-
-export onSave = =>
-    git.update_git_line self
-    return unless #ACTIVE_COMMITS > 0
-
-    for i, commit in ipairs ACTIVE_COMMITS
-      if commit.pane == @
-        debug "Marking commit #{i} as ready ..."
-        commit.ready = true
-        break
+export onBufPaneOpen = =>
+  debug "Caught onBufPaneOpen bufpane:#{self}"
+  git.update_git_line self
   
+export onSave = =>
+  git.update_git_line self
+  return unless #ACTIVE_COMMITS > 0
 
+  for i, commit in ipairs ACTIVE_COMMITS
+    if commit.pane == @
+      debug "Marking commit #{i} as ready ..."
+      commit.ready = true
+      break
+      
 export onQuit = =>
   debug "Caught onQuit, buf:#{@}"
   return unless #ACTIVE_COMMITS > 0

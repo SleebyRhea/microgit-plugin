@@ -423,14 +423,7 @@ git = (function()
     local line = form_git_line(liner, branch, revision, ahead, behind, staged)
     return self.Buf:SetOptionNative("statusformatr", line)
   end
-  local callbacks = {
-    onBufPaneOpen = function(self)
-      debug("Caught onBufPaneOpen bufpane:" .. tostring(self))
-      return update_git_line(self)
-    end
-  }
   return {
-    callbacks = callbacks,
     update_git_line = update_git_line,
     help = function(self, command)
       if not (LOADED_COMMANDS[command]) then
@@ -911,6 +904,23 @@ registerCommand = function(name, fn, cb)
     help = git[name .. "_help"]
   }
 end
+preinit = function()
+  debug("Clearing stale commit files ...")
+  local pfx = tostring(NAME) .. ".commit."
+  local dir = path.Join(tostring(cfg.ConfigDir), "tmp")
+  local files, err = ioutil.ReadDir(dir)
+  if not (err) then
+    for _index_0 = 1, #files do
+      local f = files[_index_0]
+      debug("Does " .. tostring(f:Name()) .. " have the prefix " .. tostring(pfx) .. "?")
+      if str.HasPrefix(f:Name(), pfx) then
+        local filepath = path.Join(dir, f:Name())
+        debug("Clearing " .. tostring(filepath))
+        os.Remove(filepath)
+      end
+    end
+  end
+end
 init = function()
   debug("Initializing " .. tostring(NAME))
   local cmd = cfg.GetGlobalOption("git.path")
@@ -934,23 +944,9 @@ init = function()
   registerCommand("unstage", git.unstage, cfg.NoComplete)
   return registerCommand("rm", git.rm, cfg.NoComplete)
 end
-onBufPaneOpen = git.callbacks.onBufPaneOpen
-preinit = function()
-  debug("Clearing stale commit files ...")
-  local pfx = tostring(NAME) .. ".commit."
-  local dir = path.Join(tostring(cfg.ConfigDir), "tmp")
-  local files, err = ioutil.ReadDir(dir)
-  if not (err) then
-    for _index_0 = 1, #files do
-      local f = files[_index_0]
-      debug("Does " .. tostring(f:Name()) .. " have the prefix " .. tostring(pfx) .. "?")
-      if str.HasPrefix(f:Name(), pfx) then
-        local filepath = path.Join(dir, f:Name())
-        debug("Clearing " .. tostring(filepath))
-        os.Remove(filepath)
-      end
-    end
-  end
+onBufPaneOpen = function(self)
+  debug("Caught onBufPaneOpen bufpane:" .. tostring(self))
+  return git.update_git_line(self)
 end
 onSave = function(self)
   git.update_git_line(self)
