@@ -5,10 +5,10 @@ Git for Micro
 Adds a number of commands to make working with git repos within Micro a more seamless experience. Additionally, adds a git line to your panes statuslines showing your current branch, how many commits head/behind you are, and the number of staged files you have for that branch
 
 ## Options
-- `git.updateinfo (Boolean)` 
+- `microgit.updateinfo (Boolean)` 
   - Enable/Disable branch information tracking in Micro
   - Note: This is required for the statusline functions to work properly
-- `git.command (string)`
+- `microgit.command (string)`
   - Path to the git command that you would like to use
 
 ## Statusline
