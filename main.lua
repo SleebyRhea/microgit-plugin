@@ -1,5 +1,6 @@
 VERSION = "1.0.0"
 NAME = 'microgit'
+DESC = 'Git for Micro'
 local go = assert(loadstring([[  -- script: lua
   return ({
     import = function (pkg)
@@ -20,11 +21,26 @@ local ioutil = go.import("ioutil")
 local regexp = go.import("regexp")
 local runtime = go.import("runtime")
 local ACTIVE_COMMITS = { }
-local LOADED_COMMANDS = { }
 local BRANCH_STATUS = { }
 local BUFFER_BRANCH = { }
-cfg.RegisterCommonOption("git", "command", "")
-cfg.RegisterCommonOption("git", "updateinfo", true)
+local LOADED_COMMANDS
+if not (LOADED_COMMANDS) then
+  LOADED_COMMANDS = {
+    __order = { }
+  }
+end
+local LOADED_OPTIONS
+if not (LOADED_OPTIONS) then
+  LOADED_OPTIONS = {
+    __order = { }
+  }
+end
+local LOADED_LINEFNS
+if not (LOADED_LINEFNS) then
+  LOADED_LINEFNS = {
+    __order = { }
+  }
+end
 local errors = {
   is_a_repo = "the current directory is already a repository",
   not_a_repo = "the current directory is not a repository",
@@ -35,9 +51,210 @@ local errors = {
   command_not_found = "invalid command provided (not a command)",
   no_help = "FIXME: no help for command git."
 }
+local git
+local bound
+bound = function(n, min, max)
+  return n > max and max or (n < min and min or n)
+end
 local debug
 debug = function(m)
   return app.Log(tostring(NAME) .. ": " .. tostring(m))
+end
+local chomp
+chomp = function(s)
+  s = s:gsub("^%s*", ""):gsub("%s*$", ""):gsub("[\n\r]*$", "")
+  return s
+end
+local each_line
+each_line = function(input, fn)
+  input = str.Replace(input, "\r\n", "\n", -1)
+  input = str.Replace(input, "\n\r", "\n", -1)
+  local lines = str.Split(input, "\n")
+  local l_count = #lines
+  local stop = false
+  local finish
+  finish = function()
+    stop = true
+  end
+  for i = 1, l_count do
+    if stop then
+      return 
+    end
+    fn(lines[i], i, l_count, finish)
+  end
+end
+local add_command
+add_command = function(name, fn, cb)
+  if LOADED_COMMANDS[name] then
+    return 
+  end
+  local external_name = "git." .. tostring(name)
+  local cmd
+  cmd = function(any, extra)
+    debug("command[" .. tostring(external_name) .. "] started")
+    if extra then
+      fn(any, unpack((function()
+        local _accum_0 = { }
+        local _len_0 = 1
+        for _index_0 = 1, #extra do
+          local a = extra[_index_0]
+          _accum_0[_len_0] = a
+          _len_0 = _len_0 + 1
+        end
+        return _accum_0
+      end)()))
+    else
+      fn(any)
+    end
+    debug("command[" .. tostring(external_name) .. "] completed")
+    if any and any.Buf then
+      git.update_branch_status(any.Buf)
+    elseif any.Path then
+      git.update_branch_status(any)
+    end
+  end
+  cfg.MakeCommand(external_name, cmd, cb)
+  LOADED_COMMANDS[name] = {
+    cmd = cmd,
+    help = git[name .. "_help"]
+  }
+  return table.insert(LOADED_COMMANDS.__order, name)
+end
+local add_config
+add_config = function(name, default, description)
+  if LOADED_OPTIONS[name] then
+    return 
+  end
+  cfg.RegisterCommonOption(NAME, name, default)
+  LOADED_OPTIONS[name] = description
+  return table.insert(LOADED_OPTIONS.__order, name)
+end
+local add_statusinfo
+add_statusinfo = function(name, fn, description)
+  if LOADED_LINEFNS[name] then
+    return 
+  end
+  app.SetStatusInfoFn(tostring(NAME) .. "." .. tostring(name))
+  LOADED_LINEFNS[name] = description
+  return table.insert(LOADED_LINEFNS.__order, name)
+end
+local generate_help
+generate_help = function()
+  local commands_help = "# Microgit\n" .. tostring(DESC) .. "\n\n## Commands"
+  local _list_0 = LOADED_COMMANDS.__order
+  for _index_0 = 1, #_list_0 do
+    local _continue_0 = false
+    repeat
+      local name = _list_0[_index_0]
+      debug("Adding " .. tostring(name) .. " to help")
+      local command = LOADED_COMMANDS[name]
+      commands_help = commands_help .. "\n* %pub%." .. tostring(name)
+      if not command.help then
+        _continue_0 = true
+        break
+      end
+      local on_line = 1
+      local margin = ''
+      each_line(command.help, function(line, _, total)
+        if on_line == 1 and line:match("^%s*$") then
+          return 
+        end
+        if on_line == 1 then
+          margin = line:match("^(%s*).+$")
+        end
+        line = line:gsub(margin, "", 1)
+        if (on_line >= total and line:match("^%s*$")) then
+          return 
+        end
+        commands_help = commands_help .. "\n>  " .. tostring(line)
+        on_line = on_line + 1
+      end)
+      commands_help = commands_help .. "\n"
+      _continue_0 = true
+    until true
+    if not _continue_0 then
+      break
+    end
+  end
+  local options_help = "# Microgit\n" .. tostring(DESC) .. "\n\n## Options"
+  local _list_1 = LOADED_OPTIONS.__order
+  for _index_0 = 1, #_list_1 do
+    local _continue_0 = false
+    repeat
+      local name = _list_1[_index_0]
+      debug("Adding " .. tostring(name) .. " to help")
+      options_help = options_help .. "\n* %NAME%." .. tostring(name)
+      if not LOADED_OPTIONS[name] then
+        _continue_0 = true
+        break
+      end
+      local on_line = 1
+      local margin = ''
+      each_line(LOADED_OPTIONS[name], function(line, _, total)
+        if on_line == 1 and line:match("^%s*$") then
+          return 
+        end
+        if on_line == 1 then
+          margin = line:match("^(%s*).+$")
+        end
+        line = line:gsub(margin, "", 1)
+        if (on_line >= total and line:match("^%s*$")) then
+          return 
+        end
+        options_help = options_help .. "\n>  " .. tostring(line)
+        on_line = on_line + 1
+      end)
+      options_help = options_help .. "\n"
+      _continue_0 = true
+    until true
+    if not _continue_0 then
+      break
+    end
+  end
+  local statusline_help = "# Microgit\n" .. tostring(DESC) .. "\n\n## Statusline Help"
+  local _list_2 = LOADED_LINEFNS.__order
+  for _index_0 = 1, #_list_2 do
+    local _continue_0 = false
+    repeat
+      local name = _list_2[_index_0]
+      debug("Adding " .. tostring(name) .. " to help")
+      statusline_help = statusline_help .. "\n* %NAME%." .. tostring(name)
+      if not LOADED_LINEFNS[name] then
+        _continue_0 = true
+        break
+      end
+      local on_line = 1
+      local margin = ''
+      each_line(LOADED_LINEFNS[name], function(line, _, total)
+        if on_line == 1 and line:match("^%s*$") then
+          return 
+        end
+        if on_line == 1 then
+          margin = line:match("^(%s*).+$")
+        end
+        line = line:gsub(margin, "", 1)
+        if (on_line >= total and line:match("^%s*$")) then
+          return 
+        end
+        statusline_help = statusline_help .. "\n>  " .. tostring(line)
+        on_line = on_line + 1
+      end)
+      statusline_help = statusline_help .. "\n"
+      _continue_0 = true
+    until true
+    if not _continue_0 then
+      break
+    end
+  end
+  options_help = str.Replace(options_help, '%pub%', 'git', -1)
+  options_help = str.Replace(options_help, '%NAME%', NAME, -1)
+  commands_help = str.Replace(commands_help, '%pub%', 'git', -1)
+  commands_help = str.Replace(commands_help, '%NAME%', NAME, -1)
+  statusline_help = str.Replace(statusline_help, '%pub%', 'git', -1)
+  statusline_help = str.Replace(statusline_help, '%NAME%', NAME, -1)
+  cfg.AddRuntimeFileFromMemory(cfg.RTHelp, tostring(NAME) .. ".commands", commands_help)
+  cfg.AddRuntimeFileFromMemory(cfg.RTHelp, tostring(NAME) .. ".options", options_help)
+  return cfg.AddRuntimeFileFromMemory(cfg.RTHelp, tostring(NAME) .. ".statusline", statusline_help)
 end
 local wordify
 wordify = function(word, singular, plural)
@@ -51,29 +268,6 @@ local path_exists
 path_exists = function(filepath)
   local finfo, _ = os.Stat(filepath)
   return finfo ~= nil
-end
-local chomp
-chomp = function(s)
-  s = s:gsub("^%s*", ""):gsub("%s*$", ""):gsub("[\n\r]*$", "")
-  return s
-end
-local each_line
-each_line = function(input, fn)
-  input = str.Replace(chomp(input), "\r\n", "\n", -1)
-  input = str.Replace(input, "\n\r", "\n", -1)
-  local lines = str.Split(input, "\n")
-  local l_count = #lines
-  local stop = false
-  local finish
-  finish = function()
-    stop = true
-  end
-  for i = 1, l_count do
-    if stop then
-      return 
-    end
-    fn(lines[i], finish)
-  end
 end
 local make_temp = (function()
   local rand = go.import("math/rand")
@@ -167,12 +361,6 @@ make_commit_pane = function(root, output, header, fn)
     root = root
   })
 end
-local git
-local set_callbacks
-local bound
-bound = function(n, min, max)
-  return n > max and max or (n < min and min or n)
-end
 local get_path_info = (function()
   local s = string.char(os.PathSeparator)
   local re_abs = regexp.MustCompile("^" .. tostring(runtime.GOOS == 'windows' and '[a-zA-Z]:' or '') .. tostring(s) .. tostring(s) .. "?.+" .. tostring(s) .. tostring(s) .. "?.*")
@@ -215,7 +403,7 @@ git = (function()
         return nil, "directory " .. tostring(dir) .. " does not exist"
       end
       debug("Parent directory " .. tostring(dir) .. " exists, continuing ...")
-      local base = cfg.GetGlobalOption("git.command")
+      local base = cfg.GetGlobalOption(tostring(NAME) .. ".command")
       if base == "" then
         local _
         base, _ = shl.ExecCommand("command", "-v", "git")
@@ -238,7 +426,7 @@ git = (function()
         return nil, "directory " .. tostring(dir) .. " does not exist"
       end
       debug("Parent directory " .. tostring(dir) .. " exists, continuing ...")
-      local base = cfg.GetGlobalOption("git.command")
+      local base = cfg.GetGlobalOption(tostring(NAME) .. ".command")
       if base == "" then
         local _
         base, _ = shl.ExecCommand("command", "-v", "git")
@@ -281,7 +469,7 @@ git = (function()
       local out, _ = exec("branch", "-al")
       local branches = { }
       local current = ''
-      each_line(out, function(line)
+      each_line(chomp(out), function(line)
         debug("Attempting to match: " .. tostring(line))
         local cur
         cur, name = line:match("^%s*(%*?)%s*([^%s]+)")
@@ -352,7 +540,7 @@ git = (function()
       debug("update_branch_status: was called with a non-buffer object!")
       return 
     end
-    if not (cfg.GetGlobalOption("git.updateinfo")) then
+    if not (cfg.GetGlobalOption(tostring(NAME) .. ".updateinfo")) then
       return 
     end
     if not ((not self.Type.Scratch) and (self.Path ~= '')) then
@@ -412,27 +600,6 @@ git = (function()
   end
   return {
     update_branch_status = update_branch_status,
-    help = function(self, command)
-      if not (LOADED_COMMANDS[command]) then
-        return send.help(errors.command_not_found)
-      end
-      if not (LOADED_COMMANDS[command].help) then
-        return send.help((errors.no_help .. command))
-      end
-      local _help = LOADED_COMMANDS[command].help
-      _help = str.Replace(_help, "%pub%", "git", -1)
-      local help_out = ''
-      each_line(_help, function(line)
-        if (tostring(line)):match("^%s*$") then
-          return 
-        end
-        help_out = help_out .. ((str.TrimPrefix(line, '      ')) .. "\n")
-      end)
-      return send.help(help_out)
-    end,
-    help_help = [[      usage: %pub%.help <command>
-        Get usage information for a specific git command
-    ]],
     init = function(self)
       local cmd, err = new_command(self.Buf.Path)
       if not (cmd) then
@@ -448,7 +615,7 @@ git = (function()
       end
       return send.init(out)
     end,
-    init_help = [[      usage: %pub%.init
+    init_help = [[      Usage: %pub%.init
         Initialize a repository in the current panes directory
     ]],
     fetch = function(self)
@@ -466,7 +633,7 @@ git = (function()
       end
       return send.fetch(out)
     end,
-    fetch_help = [[      usage: %pub%.fetch
+    fetch_help = [[      Usage: %pub%.fetch
         Fetch latest changes from remotes
     ]],
     checkout = (function()
@@ -496,7 +663,7 @@ git = (function()
         return send.checkout(out)
       end
     end)(),
-    checkout_help = [[      usage: %pub%.help <label>
+    checkout_help = [[      Usage: %pub%.help <label>
         Checkout a specific branch, tag, or revision
     ]],
     list = function(self)
@@ -521,7 +688,7 @@ git = (function()
       end
       return send.list_branches(output)
     end,
-    list_help = [[      usage: %pub%.list
+    list_help = [[      Usage: %pub%.list
         List branches, and note the currently active branch
     ]],
     status = function(self)
@@ -539,7 +706,7 @@ git = (function()
       end
       return send.status(status_out)
     end,
-    status_help = [[      usage: %pub%.status
+    status_help = [[      Usage: %pub%.status
         Show current status of the active repo
     ]],
     branch = (function()
@@ -578,10 +745,9 @@ git = (function()
         return send.branch(out)
       end
     end)(),
-    branch_help = [[      usage: %pub%.branch <label>
-        Create a new local branch, and switch to it
-
-        Note: Performs a git-fetch prior to making any changes.
+    branch_help = [[      Usage: %pub%.branch <label>
+        Create a new local branch, and switch to it, also note that it performs a 
+        git-fetch prior to making any changes.
     ]],
     commit = (function()
       local msg_line = regexp.MustCompile("^\\s*([^#])")
@@ -606,7 +772,7 @@ git = (function()
         end
         local commit_msg_start = base_msg
         local status_out, _ = cmd.exec("status")
-        each_line(status_out, function(line)
+        each_line(chomp(status_out), function(line)
           commit_msg_start = commit_msg_start .. "# " .. tostring(line) .. "\n"
         end)
         local header = "[new commit: save and quit to finalize]"
@@ -617,7 +783,7 @@ git = (function()
             return send.commit("Aborting, empty commit")
           end
           local final_commit = ''
-          each_line(commit_msg, function(line, final)
+          each_line(chomp(commit_msg), function(line)
             if line == nil then
               return 
             end
@@ -640,7 +806,7 @@ git = (function()
         debug("Awaiting commit completion within onQuit")
       end
     end)(),
-    commit_help = [[      usage: %pub%.commit [<commit message>]
+    commit_help = [[      Usage: %pub%.commit [<commit message>]
         Begin a new commit. If a commit message is not provided, opens a new
         pane to enter the desired message into. Commit is initiated when the
         pane is saved and then closed.
@@ -669,7 +835,7 @@ git = (function()
         end
       end
     end)(),
-    push_help = [[      usage: %pub%.push [<label>]
+    push_help = [[      Usage: %pub%.push [<label>]
         Push local changes onto remote. A branch label is optional, and limits
         the scope of the push to the provided branch. Otherwise, all changes
         are pushed.
@@ -689,7 +855,7 @@ git = (function()
       end
       return send.pull(pull_out)
     end,
-    pull_help = [[      usage: %pub%.pull
+    pull_help = [[      Usage: %pub%.pull
         Pull all changes from remote into the working tree
     ]],
     log = function(self)
@@ -706,7 +872,7 @@ git = (function()
       if err then
         return send.log
       end
-      each_line(out, function(line)
+      each_line(chomp(out), function(line)
         if re_commit:MatchString(line) then
           count = count + 1
         end
@@ -715,7 +881,7 @@ git = (function()
         header = tostring(count) .. " " .. tostring(w_commit(count))
       })
     end,
-    log_help = [[      usage: %pub%.log
+    log_help = [[      Usage: %pub%.log
         Show the commit log
     ]],
     stage = function(self, ...)
@@ -759,11 +925,11 @@ git = (function()
       end
       return cmd.exec("add", unpack(files))
     end,
-    stage_help = [[      usage: %pub%.stage [<file1>, <file2>, ...] [<options>]
+    stage_help = [[      Usage: %pub%.stage [<file1>, <file2>, ...] [<options>]
         Stage a file (or files) to commit.
 
-        Options:
-          --all   Stage all files
+      Options:
+        --all   Stage all files
     ]],
     unstage = function(self, ...)
       local cmd, err = new_command(self.Buf.Path)
@@ -806,11 +972,11 @@ git = (function()
       end
       return cmd.exec("reset", "--", unpack(files))
     end,
-    unstage_help = [[      usage: %pub%.unstage [<file1>, <file2>, ...] [<options>]
+    unstage_help = [[      Usage: %pub%.unstage [<file1>, <file2>, ...] [<options>]
         Unstage a file (or files) to commit.
 
-        Options:
-          --all   Unstage all files
+      Options:
+        --all   Unstage all files
     ]],
     rm = function(self, ...)
       local cmd, err = new_command(self.Buf.Path)
@@ -853,44 +1019,11 @@ git = (function()
       end
       return cmd.exec("rm", unpack(files))
     end,
-    rm_help = [[      usage: %pub%.rm [<file1>, <file2>, ...]
+    rm_help = [[      Usage: %pub%.rm [<file1>, <file2>, ...]
         Stage the removal of a file (or files) from the git repo.
     ]]
   }
 end)()
-local registerCommand
-registerCommand = function(name, fn, cb)
-  local external_name = "git." .. tostring(name)
-  local cmd
-  cmd = function(any, extra)
-    debug("command[" .. tostring(external_name) .. "] started")
-    if extra then
-      fn(any, unpack((function()
-        local _accum_0 = { }
-        local _len_0 = 1
-        for _index_0 = 1, #extra do
-          local a = extra[_index_0]
-          _accum_0[_len_0] = a
-          _len_0 = _len_0 + 1
-        end
-        return _accum_0
-      end)()))
-    else
-      fn(any)
-    end
-    debug("command[" .. tostring(external_name) .. "] completed")
-    if any and any.Buf then
-      git.update_branch_status(any.Buf)
-    elseif any.Path then
-      git.update_branch_status(any)
-    end
-  end
-  cfg.MakeCommand(external_name, cmd, cb)
-  LOADED_COMMANDS[name] = {
-    cmd = cmd,
-    help = git[name .. "_help"]
-  }
-end
 numahead = function(self)
   if not (BUFFER_BRANCH[self.Path]) then
     return "-"
@@ -930,12 +1063,23 @@ end
 onbranch = function(self)
   return tostring(BUFFER_BRANCH[self.Path] or "")
 end
-app.SetStatusInfoFn(tostring(NAME) .. ".numahead")
-app.SetStatusInfoFn(tostring(NAME) .. ".numbehind")
-app.SetStatusInfoFn(tostring(NAME) .. ".numstaged")
-app.SetStatusInfoFn(tostring(NAME) .. ".onbranch")
-app.SetStatusInfoFn(tostring(NAME) .. ".oncommit")
 preinit = function()
+  add_config("command", "", [[    The absolute path to the command to use for git operations (type: string) 
+  ]])
+  add_config("updateinfo", true, [[    Update tracked branch information during select callbacks (type: boolean)
+
+    Note: Required for statusline
+  ]])
+  add_statusinfo("numahead", numahead, [[    The number of commits ahead of your branches origin (type: number)
+  ]])
+  add_statusinfo("numbehind", numbehind, [[    The number of commits behind of origin your branches tree is (type: number)
+  ]])
+  add_statusinfo("numstaged", numstaged, [[    The number of files staged in the local branch (type: number)
+  ]])
+  add_statusinfo("onbranch", onbranch, [[    The current branch of a pane
+  ]])
+  add_statusinfo("oncommit", oncommit, [[    The latest commit short hash
+  ]])
   debug("Clearing stale commit files ...")
   local pfx = tostring(NAME) .. ".commit."
   local dir = path.Join(tostring(cfg.ConfigDir), "tmp")
@@ -954,7 +1098,7 @@ preinit = function()
 end
 init = function()
   debug("Initializing " .. tostring(NAME))
-  local cmd = cfg.GetGlobalOption("git.command")
+  local cmd = tostring(cfg.GetGlobalOption(tostring(NAMES) .. ".command"))
   if cmd == "" then
     local _
     cmd, _ = shl.ExecCommand("command", "-v", "git")
@@ -962,19 +1106,19 @@ init = function()
       app.TermMessage(tostring(NAME) .. ": git not present in $PATH or set, some functionality will not work correctly")
     end
   end
-  registerCommand("help", git.help, cfg.NoComplete)
-  registerCommand("init", git.init, cfg.NoComplete)
-  registerCommand("pull", git.pull, cfg.NoComplete)
-  registerCommand("push", git.push, cfg.NoComplete)
-  registerCommand("list", git.list, cfg.NoComplete)
-  registerCommand("log", git.log, cfg.NoComplete)
-  registerCommand("commit", git.commit, cfg.NoComplete)
-  registerCommand("status", git.status, cfg.NoComplete)
-  registerCommand("branch", git.branch, cfg.NoComplete)
-  registerCommand("checkout", git.checkout, cfg.NoComplete)
-  registerCommand("stage", git.stage, cfg.FileComplete)
-  registerCommand("unstage", git.unstage, cfg.FileComplete)
-  return registerCommand("rm", git.rm, cfg.FileComplete)
+  add_command("init", git.init, cfg.NoComplete)
+  add_command("pull", git.pull, cfg.NoComplete)
+  add_command("push", git.push, cfg.NoComplete)
+  add_command("list", git.list, cfg.NoComplete)
+  add_command("log", git.log, cfg.NoComplete)
+  add_command("commit", git.commit, cfg.NoComplete)
+  add_command("status", git.status, cfg.NoComplete)
+  add_command("branch", git.branch, cfg.NoComplete)
+  add_command("checkout", git.checkout, cfg.NoComplete)
+  add_command("stage", git.stage, cfg.FileComplete)
+  add_command("unstage", git.unstage, cfg.FileComplete)
+  add_command("rm", git.rm, cfg.FileComplete)
+  return generate_help()
 end
 onBufPaneOpen = function(self)
   debug("Caught onBufPaneOpen bufpane:" .. tostring(self))
@@ -1027,7 +1171,6 @@ onQuit = function(self)
             break
           end
         end
-        break
       else
         if self.Buf:Modified() then
           local info = app.InfoBar()

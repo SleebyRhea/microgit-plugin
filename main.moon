@@ -1,5 +1,6 @@
 export VERSION = "1.0.0"
 export NAME    = 'microgit'
+export DESC    = 'Git for Micro'
 
 -- Workaround for import being a keyword in Moonscript
 go = assert loadstring([[
@@ -25,12 +26,12 @@ regexp = go.import"regexp"
 runtime = go.import"runtime"
 
 ACTIVE_COMMITS = {}
-LOADED_COMMANDS = {}
 BRANCH_STATUS = {}
 BUFFER_BRANCH = {}
 
-cfg.RegisterCommonOption "git", "command", ""
-cfg.RegisterCommonOption "git", "updateinfo", true
+LOADED_COMMANDS = { __order: {} } unless LOADED_COMMANDS
+LOADED_OPTIONS = { __order: {} } unless LOADED_OPTIONS
+LOADED_LINEFNS = { __order: {} } unless LOADED_LINEFNS
 
 errors =
   is_a_repo: "the current directory is already a repository"
@@ -42,8 +43,151 @@ errors =
   command_not_found: "invalid command provided (not a command)"
   no_help: "FIXME: no help for command git."
 
+local git
+bound = (n, min, max) -> n > max and max or (n < min and min or n)
 debug = (m) -> app.Log "#{NAME}: #{m}"
 
+--- Delete leading and trailing spaces, and the final newline
+chomp = (s) ->
+  s = s\gsub("^%s*", "")\gsub("%s*$", "")\gsub("[\n\r]*$", "")
+  return s
+
+
+--- Run a given function for each line in a string
+each_line = (input, fn) ->
+  input = str.Replace input, "\r\n", "\n", -1
+  input = str.Replace input, "\n\r", "\n", -1
+  lines = str.Split(input, "\n")
+  l_count = #lines
+
+  stop = false
+  finish = -> stop = true
+
+  for i = 1, l_count
+    return if stop
+
+    fn lines[i], i, l_count, finish
+
+--- Register a provided function+callback as a command
+-- Wraps the given function to account for Micros handling of arguments placing
+-- additional arguments of len size > 1 in a Go array
+add_command = (name, fn, cb) ->
+  return if LOADED_COMMANDS[name]
+
+  external_name = "git.#{name}"
+  cmd = (any, extra) ->
+    debug "command[#{external_name}] started"
+    if extra
+      fn any, unpack([a for a in *extra])
+    else
+      fn any
+    debug "command[#{external_name}] completed"
+
+    if any and any.Buf then
+      git.update_branch_status any.Buf
+    elseif any.Path
+      git.update_branch_status any
+    
+    return
+
+  cfg.MakeCommand external_name, cmd, cb
+  LOADED_COMMANDS[name] = { :cmd, help: git[name .. "_help"] }
+  table.insert LOADED_COMMANDS.__order, name
+
+
+--- Register a provided configuration option
+-- Canonicalizes the option name, and places the provided information into
+-- the LOADED_OPTIONS table for later usage
+add_config = (name, default, description) ->
+  return if LOADED_OPTIONS[name]
+  
+  cfg.RegisterCommonOption NAME, name, default
+  LOADED_OPTIONS[name] = description
+  table.insert LOADED_OPTIONS.__order, name
+
+
+--- Register a provided statusline parameter function
+-- Canonicalizes the parameter name, and places the provided information into
+-- the LOADED_PARAMS table for later usage
+add_statusinfo = (name, fn, description) ->
+  return if LOADED_LINEFNS[name]
+
+  app.SetStatusInfoFn "#{NAME}.#{name}"
+  LOADED_LINEFNS[name] = description
+  table.insert LOADED_LINEFNS.__order, name
+
+--- Generates the help page from the various registered components, and loads it
+generate_help = ->
+  commands_help = "# Microgit\n#{DESC}\n\n## Commands"
+  for name in *LOADED_COMMANDS.__order
+    debug "Adding #{name} to help"
+    command =  LOADED_COMMANDS[name]
+    commands_help ..= "\n* %pub%.#{name}"
+    continue if not command.help
+
+    on_line = 1
+    margin = ''
+    
+    each_line command.help, (line, _, total) ->
+      return if on_line == 1 and line\match"^%s*$"
+      margin = line\match"^(%s*).+$" if on_line == 1
+      line = line\gsub(margin, "", 1)
+      return if (on_line >= total and line\match"^%s*$")
+      commands_help ..= "\n>  #{line}"
+      on_line += 1
+
+    commands_help ..= "\n"
+
+
+  options_help = "# Microgit\n#{DESC}\n\n## Options"
+  for name in *LOADED_OPTIONS.__order
+    debug "Adding #{name} to help"
+    options_help ..= "\n* %NAME%.#{name}"
+    continue if not LOADED_OPTIONS[name]
+
+    on_line = 1
+    margin = ''
+    
+    each_line LOADED_OPTIONS[name], (line, _, total) ->
+      return if on_line == 1 and line\match"^%s*$"
+      margin = line\match"^(%s*).+$" if on_line == 1
+      line = line\gsub(margin, "", 1)
+      return if (on_line >= total and line\match"^%s*$")
+      options_help ..= "\n>  #{line}"
+      on_line += 1
+
+    options_help ..= "\n"
+    
+
+  statusline_help = "# Microgit\n#{DESC}\n\n## Statusline Help"
+  for name in *LOADED_LINEFNS.__order
+    debug "Adding #{name} to help"
+    statusline_help ..= "\n* %NAME%.#{name}"
+    continue if not LOADED_LINEFNS[name]
+
+    on_line = 1
+    margin = ''
+    
+    each_line LOADED_LINEFNS[name], (line, _, total) ->
+      return if on_line == 1 and line\match"^%s*$"
+      margin = line\match"^(%s*).+$" if on_line == 1
+      line = line\gsub(margin, "", 1)
+      return if (on_line >= total and line\match"^%s*$")
+      statusline_help ..= "\n>  #{line}"
+      on_line += 1
+
+    statusline_help ..= "\n"
+
+  options_help = str.Replace options_help, '%pub%', 'git', -1
+  options_help = str.Replace options_help, '%NAME%', NAME, -1
+  commands_help = str.Replace commands_help, '%pub%', 'git', -1
+  commands_help = str.Replace commands_help, '%NAME%', NAME, -1    
+  statusline_help = str.Replace statusline_help, '%pub%', 'git', -1
+  statusline_help = str.Replace statusline_help, '%NAME%', NAME, -1
+  
+  cfg.AddRuntimeFileFromMemory cfg.RTHelp, "#{NAME}.commands", commands_help
+  cfg.AddRuntimeFileFromMemory cfg.RTHelp, "#{NAME}.options", options_help
+  cfg.AddRuntimeFileFromMemory cfg.RTHelp, "#{NAME}.statusline", statusline_help
 
 --- Generate a function that takes a number, and returns the correct plurality of a word
 wordify = (word, singular, plural) ->
@@ -57,28 +201,6 @@ wordify = (word, singular, plural) ->
 path_exists = (filepath) ->
   finfo, _ = os.Stat filepath
   return finfo != nil
-
-
---- Delete leading and trailing spaces, and the final newline
-chomp = (s) ->
-  s = s\gsub("^%s*", "")\gsub("%s*$", "")\gsub("[\n\r]*$", "")
-  return s
-
-
---- Run a given function for each line in a string
-each_line = (input, fn) ->
-  input = str.Replace chomp(input), "\r\n", "\n", -1
-  input = str.Replace input, "\n\r", "\n", -1
-  lines = str.Split(input, "\n")
-  l_count = #lines
-
-  stop = false
-  finish = -> stop = true
-
-  for i = 1, l_count
-    return if stop
-
-    fn lines[i], finish
 
 
 make_temp = (->
@@ -202,13 +324,6 @@ make_commit_pane = (root, output, header, fn) ->
     root: root
   }
 
-local git
-local set_callbacks
-
-
-bound = (n, min, max) ->
-  n > max and max or (n < min and min or n)
-
 
 -- filepath.Abs and filepath.IsAbs both exist, however, their use in Lua code
 -- here currently panics the application. Until then, we'll just have to rely
@@ -262,7 +377,7 @@ git = (->
         return nil, "directory #{dir} does not exist"
 
       debug "Parent directory #{dir} exists, continuing ..."
-      base = cfg.GetGlobalOption "git.command"
+      base = cfg.GetGlobalOption "#{NAME}.command"
       if base == ""
         base, _ = shl.ExecCommand "command", "-v", "git"
         base = chomp base
@@ -285,7 +400,7 @@ git = (->
         return nil, "directory #{dir} does not exist"
 
       debug "Parent directory #{dir} exists, continuing ..."
-      base = cfg.GetGlobalOption "git.command"
+      base = cfg.GetGlobalOption "#{NAME}.command"
       if base == ""
         base, _ = shl.ExecCommand "command", "-v", "git"
         base = chomp base
@@ -325,7 +440,7 @@ git = (->
       branches = {}
       current = ''
 
-      each_line out, (line) ->
+      each_line chomp(out), (line) ->
         debug "Attempting to match: #{line}"
         cur, name = line\match "^%s*(%*?)%s*([^%s]+)"
         if name
@@ -387,7 +502,7 @@ git = (->
       debug "update_branch_status: was called with a non-buffer object!"
       return
     
-    return unless cfg.GetGlobalOption "git.updateinfo"
+    return unless cfg.GetGlobalOption "#{NAME}.updateinfo"
     return unless (not @Type.Scratch) and (@Path != '')
     
     debug "update_branch_status: Beginning update process for #{self}"
@@ -441,26 +556,6 @@ git = (->
 
   return {
     :update_branch_status
-  
-    help: (command) =>
-      unless LOADED_COMMANDS[command]
-        return send.help errors.command_not_found
-      unless LOADED_COMMANDS[command].help
-        return send.help (errors.no_help .. command)
-      _help = LOADED_COMMANDS[command].help
-      _help = str.Replace _help, "%pub%", "git", -1
-
-      help_out = ''
-      each_line _help, (line) ->
-        return if (tostring line)\match "^%s*$"
-        help_out ..= (str.TrimPrefix line, '      ') .. "\n"
-
-      send.help help_out
-      
-    help_help: [[
-      usage: %pub%.help <command>
-        Get usage information for a specific git command
-    ]]
       
     init: =>
       cmd, err = new_command @Buf.Path
@@ -474,7 +569,7 @@ git = (->
       send.init out
       
     init_help: [[
-      usage: %pub%.init
+      Usage: %pub%.init
         Initialize a repository in the current panes directory
     ]]
     
@@ -489,7 +584,7 @@ git = (->
       send.fetch out
 
     fetch_help: [[
-      usage: %pub%.fetch
+      Usage: %pub%.fetch
         Fetch latest changes from remotes
     ]]
 
@@ -519,7 +614,7 @@ git = (->
     )!
 
     checkout_help: [[
-      usage: %pub%.help <label>
+      Usage: %pub%.help <label>
         Checkout a specific branch, tag, or revision
     ]]
 
@@ -545,7 +640,7 @@ git = (->
       return send.list_branches output
 
     list_help: [[
-      usage: %pub%.list
+      Usage: %pub%.list
         List branches, and note the currently active branch
     ]]
 
@@ -563,7 +658,7 @@ git = (->
       send.status status_out
 
     status_help: [[
-      usage: %pub%.status
+      Usage: %pub%.status
         Show current status of the active repo
     ]]
     
@@ -605,10 +700,9 @@ git = (->
     )!
 
     branch_help: [[
-      usage: %pub%.branch <label>
-        Create a new local branch, and switch to it
-
-        Note: Performs a git-fetch prior to making any changes.
+      Usage: %pub%.branch <label>
+        Create a new local branch, and switch to it, also note that it performs a 
+        git-fetch prior to making any changes.
     ]]
 
     commit: (->    
@@ -632,7 +726,7 @@ git = (->
 
         commit_msg_start = base_msg
         status_out, _ = cmd.exec "status"
-        each_line status_out, (line) ->
+        each_line chomp(status_out), (line) ->
           commit_msg_start ..= "# #{line}\n"
           
         header = "[new commit: save and quit to finalize]"
@@ -645,7 +739,7 @@ git = (->
             return send.commit "Aborting, empty commit"
 
           final_commit = ''
-          each_line commit_msg, (line, final) ->
+          each_line chomp(commit_msg), (line) ->
             return if line == nil
             
             line = chomp line
@@ -666,7 +760,7 @@ git = (->
     )!
 
     commit_help: [[
-      usage: %pub%.commit [<commit message>]
+      Usage: %pub%.commit [<commit message>]
         Begin a new commit. If a commit message is not provided, opens a new
         pane to enter the desired message into. Commit is initiated when the
         pane is saved and then closed.
@@ -695,7 +789,7 @@ git = (->
     )!
 
     push_help: [[
-      usage: %pub%.push [<label>]
+      Usage: %pub%.push [<label>]
         Push local changes onto remote. A branch label is optional, and limits
         the scope of the push to the provided branch. Otherwise, all changes
         are pushed.
@@ -714,7 +808,7 @@ git = (->
       send.pull pull_out
 
     pull_help: [[
-      usage: %pub%.pull
+      Usage: %pub%.pull
         Pull all changes from remote into the working tree
     ]]
 
@@ -729,7 +823,7 @@ git = (->
       count = 0
       out, err = cmd.exec "log"
       return send.log if err
-      each_line out, (line) ->
+      each_line chomp(out), (line) ->
         count += 1 if re_commit\MatchString line
 
       send.log out, {
@@ -737,7 +831,7 @@ git = (->
       }
 
     log_help: [[
-      usage: %pub%.log
+      Usage: %pub%.log
         Show the commit log
     ]]
 
@@ -767,11 +861,11 @@ git = (->
       cmd.exec "add", unpack files
 
     stage_help: [[
-      usage: %pub%.stage [<file1>, <file2>, ...] [<options>]
+      Usage: %pub%.stage [<file1>, <file2>, ...] [<options>]
         Stage a file (or files) to commit.
 
-        Options:
-          --all   Stage all files
+      Options:
+        --all   Stage all files
     ]]
 
     unstage: (...) =>
@@ -802,11 +896,11 @@ git = (->
       cmd.exec "reset", "--", unpack files
 
     unstage_help: [[
-      usage: %pub%.unstage [<file1>, <file2>, ...] [<options>]
+      Usage: %pub%.unstage [<file1>, <file2>, ...] [<options>]
         Unstage a file (or files) to commit.
 
-        Options:
-          --all   Unstage all files
+      Options:
+        --all   Unstage all files
     ]]
 
     rm: (...) =>
@@ -835,34 +929,11 @@ git = (->
       cmd.exec "rm", unpack files
 
     rm_help: [[
-      usage: %pub%.rm [<file1>, <file2>, ...]
+      Usage: %pub%.rm [<file1>, <file2>, ...]
         Stage the removal of a file (or files) from the git repo.
     ]]
   }
 )!
-
---- Register a provided function+callback as a command
--- Wraps the given function to account for Micros handling of arguments placing
--- additional arguments of len size > 1 in a Go array
-registerCommand = (name, fn, cb) ->
-  external_name = "git.#{name}"
-  cmd = (any, extra) ->
-    debug "command[#{external_name}] started"
-    if extra
-      fn any, unpack([a for a in *extra])
-    else
-      fn any
-    debug "command[#{external_name}] completed"
-
-    if any and any.Buf then
-      git.update_branch_status any.Buf
-    elseif any.Path
-      git.update_branch_status any
-    
-    return
-
-  cfg.MakeCommand external_name, cmd, cb
-  LOADED_COMMANDS[name] = { :cmd, help: git[name .. "_help"] }
 
 export numahead = =>
   return "-" unless BUFFER_BRANCH[@Path]
@@ -887,13 +958,38 @@ export oncommit = =>
 export onbranch = =>
   return tostring(BUFFER_BRANCH[@Path] or "")
 
-app.SetStatusInfoFn "#{NAME}.numahead"
-app.SetStatusInfoFn "#{NAME}.numbehind"
-app.SetStatusInfoFn "#{NAME}.numstaged"
-app.SetStatusInfoFn "#{NAME}.onbranch"
-app.SetStatusInfoFn "#{NAME}.oncommit"
 
 export preinit = ->
+  add_config "command", "", [[
+    The absolute path to the command to use for git operations (type: string) 
+  ]]
+
+  add_config "updateinfo", true, [[
+    Update tracked branch information during select callbacks (type: boolean)
+
+    Note: Required for statusline
+  ]]
+
+  add_statusinfo "numahead", numahead, [[
+    The number of commits ahead of your branches origin (type: number)
+  ]]
+  
+  add_statusinfo "numbehind", numbehind, [[
+    The number of commits behind of origin your branches tree is (type: number)
+  ]]
+  
+  add_statusinfo "numstaged", numstaged, [[
+    The number of files staged in the local branch (type: number)
+  ]]
+  
+  add_statusinfo "onbranch", onbranch, [[
+    The current branch of a pane
+  ]]
+  
+  add_statusinfo "oncommit", oncommit, [[
+    The latest commit short hash
+  ]]
+
   debug "Clearing stale commit files ..."
   pfx = "#{NAME}.commit."
   dir = path.Join "#{cfg.ConfigDir}", "tmp"
@@ -910,25 +1006,26 @@ export preinit = ->
 export init = ->
   debug "Initializing #{NAME}"
 
-  cmd = cfg.GetGlobalOption "git.command"
+  cmd = tostring cfg.GetGlobalOption "#{NAMES}.command"
   if cmd == ""
     cmd, _ = shl.ExecCommand "command", "-v", "git"
     if cmd == '' or not cmd
       app.TermMessage "#{NAME}: git not present in $PATH or set, some functionality will not work correctly"
 
-  registerCommand "help", git.help, cfg.NoComplete
-  registerCommand "init", git.init, cfg.NoComplete
-  registerCommand "pull", git.pull, cfg.NoComplete
-  registerCommand "push", git.push, cfg.NoComplete
-  registerCommand "list", git.list, cfg.NoComplete
-  registerCommand "log", git.log, cfg.NoComplete
-  registerCommand "commit", git.commit, cfg.NoComplete
-  registerCommand "status", git.status, cfg.NoComplete
-  registerCommand "branch", git.branch, cfg.NoComplete
-  registerCommand "checkout", git.checkout, cfg.NoComplete
-  registerCommand "stage", git.stage, cfg.FileComplete
-  registerCommand "unstage", git.unstage, cfg.FileComplete
-  registerCommand "rm", git.rm, cfg.FileComplete
+  add_command "init", git.init, cfg.NoComplete
+  add_command "pull", git.pull, cfg.NoComplete
+  add_command "push", git.push, cfg.NoComplete
+  add_command "list", git.list, cfg.NoComplete
+  add_command "log", git.log, cfg.NoComplete
+  add_command "commit", git.commit, cfg.NoComplete
+  add_command "status", git.status, cfg.NoComplete
+  add_command "branch", git.branch, cfg.NoComplete
+  add_command "checkout", git.checkout, cfg.NoComplete
+  add_command "stage", git.stage, cfg.FileComplete
+  add_command "unstage", git.unstage, cfg.FileComplete
+  add_command "rm", git.rm, cfg.FileComplete
+
+  generate_help!
 
 
 --- Populate branch tracking information for the buffer
@@ -974,7 +1071,6 @@ export onQuit = =>
             table.remove active, t
             ACTIVE_COMMITS = active
             break
-        break
       else
         if @Buf\Modified!
           -- We need to override the current YNPrompt if it exists,
@@ -999,7 +1095,7 @@ export onQuit = =>
               if yes
                 @Buf\Save!
                 @ForceQuit!
-
+                
                 commit.callback commit.file
                 debug "Removing #{commit.file}"
                 os.Remove commit.file
@@ -1015,5 +1111,4 @@ export onQuit = =>
                 info\Message "Aborted commit (closed before saving)"
                 @ForceQuit!
               return
-
         break
