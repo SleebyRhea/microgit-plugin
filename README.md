@@ -24,7 +24,10 @@ This plugin exposes the following functions for statusline configurations:
     - Returns the current commit short hash
   - `microgit.onbranch`
     - Returns the current panes branch (if any)
-  - Example: ` $(microgit.onbranch) ↑$(microgit.numahead) ↓$(microgit.numbehind) ↓↑$(microgit.numstaged) | commit:$(microgit.oncommit)`
+  - Example:
+    ```
+    $(microgit.onbranch) ↑$(microgit.numahead) ↓$(microgit.numbehind) ↓↑$(microgit.numstaged) | commit:$(microgit.oncommit)
+    ```
 
 ## Commands
   - `git.init()`
