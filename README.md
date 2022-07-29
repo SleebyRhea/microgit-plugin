@@ -2,14 +2,17 @@
 Git for Micro
 
 ## About
-Adds a number of commands to make working with git repos within Micro a more seamless experience. Additionally, adds a git line to your panes statuslines showing your current branch, how many commits head/behind you are, and the number of staged files you have for that branch
+Adds a number of commands to make working with git repos within Micro a more seamless experience. Additionally, adds statusline parameters to make showing branch information on your statusline easily configurable. Finally, improves on the diff plugins git change support.
 
 ## Options
-- `microgit.updateinfo (Boolean)` 
+- `microgit.updateinfo (boolean)` 
   - Enable/Disable branch information tracking in Micro
   - Note: This is required for the statusline functions to work properly
 - `microgit.command (string)`
   - Path to the git command that you would like to use
+- `microgit.gitgutter (boolean)`
+  - Enable/Disable diff base updates during saving, buffer open, and command run
+  - To use properly, enable `diffgutter`
 
 ## Statusline
 NOTE: In order to use the statusline functions, you MUST make sure the plugin directory name is `microgit` or Micro will not register the plugin correctly.
