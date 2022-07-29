@@ -138,124 +138,108 @@ add_statusinfo = function(name, fn, description)
   LOADED_LINEFNS[name] = description
   return table.insert(LOADED_LINEFNS.__order, name)
 end
-local generate_help
-generate_help = function()
-  local commands_help = "# Microgit\n" .. tostring(DESC) .. "\n\n## Commands"
-  local _list_0 = LOADED_COMMANDS.__order
-  for _index_0 = 1, #_list_0 do
-    local _continue_0 = false
-    repeat
-      local name = _list_0[_index_0]
-      debug("Adding " .. tostring(name) .. " to help")
-      local command = LOADED_COMMANDS[name]
-      commands_help = commands_help .. "\n* %pub%." .. tostring(name)
-      if not command.help then
+local generate_help = (function()
+  local get_parser
+  get_parser = function(on_line_complete)
+    local on_line = 1
+    local margin = ''
+    local parsed = ''
+    local _parse_line
+    _parse_line = function(line, _, total)
+      if on_line == 1 and line:match("^%s*$") then
+        return 
+      end
+      if on_line == 1 then
+        margin = line:match("^(%s*).+$")
+      end
+      line = line:gsub(margin, "", 1)
+      if (on_line >= total and line:match("^%s*$")) then
+        return 
+      end
+      parsed = parsed .. "\n>  " .. tostring(line)
+      on_line = on_line + 1
+    end
+    local _get_result
+    _get_result = function()
+      return parsed
+    end
+    return _parse_line, _get_result
+  end
+  return function()
+    local commands_help = "# Microgit\n" .. tostring(DESC) .. "\n\n## Commands"
+    local _list_0 = LOADED_COMMANDS.__order
+    for _index_0 = 1, #_list_0 do
+      local _continue_0 = false
+      repeat
+        local name = _list_0[_index_0]
+        debug("Adding " .. tostring(name) .. " to help")
+        commands_help = commands_help .. "\n* %pub%." .. tostring(name)
+        if not LOADED_COMMANDS[name].help then
+          _continue_0 = true
+          break
+        end
+        local parser, parser_result = get_parser()
+        each_line(LOADED_COMMANDS[name].help, parser)
+        commands_help = commands_help .. tostring(parser_result()) .. "\n"
         _continue_0 = true
+      until true
+      if not _continue_0 then
         break
       end
-      local on_line = 1
-      local margin = ''
-      each_line(command.help, function(line, _, total)
-        if on_line == 1 and line:match("^%s*$") then
-          return 
-        end
-        if on_line == 1 then
-          margin = line:match("^(%s*).+$")
-        end
-        line = line:gsub(margin, "", 1)
-        if (on_line >= total and line:match("^%s*$")) then
-          return 
-        end
-        commands_help = commands_help .. "\n>  " .. tostring(line)
-        on_line = on_line + 1
-      end)
-      commands_help = commands_help .. "\n"
-      _continue_0 = true
-    until true
-    if not _continue_0 then
-      break
     end
-  end
-  local options_help = "# Microgit\n" .. tostring(DESC) .. "\n\n## Options"
-  local _list_1 = LOADED_OPTIONS.__order
-  for _index_0 = 1, #_list_1 do
-    local _continue_0 = false
-    repeat
-      local name = _list_1[_index_0]
-      debug("Adding " .. tostring(name) .. " to help")
-      options_help = options_help .. "\n* %NAME%." .. tostring(name)
-      if not LOADED_OPTIONS[name] then
+    local options_help = "# Microgit\n" .. tostring(DESC) .. "\n\n## Options"
+    local _list_1 = LOADED_OPTIONS.__order
+    for _index_0 = 1, #_list_1 do
+      local _continue_0 = false
+      repeat
+        local name = _list_1[_index_0]
+        debug("Adding " .. tostring(name) .. " to help")
+        options_help = options_help .. "\n* %NAME%." .. tostring(name)
+        if not LOADED_OPTIONS[name] then
+          _continue_0 = true
+          break
+        end
+        local parser, parser_result = get_parser()
+        each_line(LOADED_OPTIONS[name], parser)
+        options_help = options_help .. tostring(parser_result()) .. "\n"
         _continue_0 = true
+      until true
+      if not _continue_0 then
         break
       end
-      local on_line = 1
-      local margin = ''
-      each_line(LOADED_OPTIONS[name], function(line, _, total)
-        if on_line == 1 and line:match("^%s*$") then
-          return 
-        end
-        if on_line == 1 then
-          margin = line:match("^(%s*).+$")
-        end
-        line = line:gsub(margin, "", 1)
-        if (on_line >= total and line:match("^%s*$")) then
-          return 
-        end
-        options_help = options_help .. "\n>  " .. tostring(line)
-        on_line = on_line + 1
-      end)
-      options_help = options_help .. "\n"
-      _continue_0 = true
-    until true
-    if not _continue_0 then
-      break
     end
-  end
-  local statusline_help = "# Microgit\n" .. tostring(DESC) .. "\n\n## Statusline Help"
-  local _list_2 = LOADED_LINEFNS.__order
-  for _index_0 = 1, #_list_2 do
-    local _continue_0 = false
-    repeat
-      local name = _list_2[_index_0]
-      debug("Adding " .. tostring(name) .. " to help")
-      statusline_help = statusline_help .. "\n* %NAME%." .. tostring(name)
-      if not LOADED_LINEFNS[name] then
+    local statusline_help = "# Microgit\n" .. tostring(DESC) .. "\n\n## Statusline Help"
+    local _list_2 = LOADED_LINEFNS.__order
+    for _index_0 = 1, #_list_2 do
+      local _continue_0 = false
+      repeat
+        local name = _list_2[_index_0]
+        debug("Adding " .. tostring(name) .. " to help")
+        statusline_help = statusline_help .. "\n* %NAME%." .. tostring(name)
+        if not LOADED_LINEFNS[name] then
+          _continue_0 = true
+          break
+        end
+        local parser, parser_result = get_parser()
+        each_line(LOADED_LINEFNS[name], parser)
+        statusline_help = statusline_help .. tostring(parser_result()) .. "\n"
         _continue_0 = true
+      until true
+      if not _continue_0 then
         break
       end
-      local on_line = 1
-      local margin = ''
-      each_line(LOADED_LINEFNS[name], function(line, _, total)
-        if on_line == 1 and line:match("^%s*$") then
-          return 
-        end
-        if on_line == 1 then
-          margin = line:match("^(%s*).+$")
-        end
-        line = line:gsub(margin, "", 1)
-        if (on_line >= total and line:match("^%s*$")) then
-          return 
-        end
-        statusline_help = statusline_help .. "\n>  " .. tostring(line)
-        on_line = on_line + 1
-      end)
-      statusline_help = statusline_help .. "\n"
-      _continue_0 = true
-    until true
-    if not _continue_0 then
-      break
     end
+    options_help = str.Replace(options_help, '%pub%', 'git', -1)
+    options_help = str.Replace(options_help, '%NAME%', NAME, -1)
+    commands_help = str.Replace(commands_help, '%pub%', 'git', -1)
+    commands_help = str.Replace(commands_help, '%NAME%', NAME, -1)
+    statusline_help = str.Replace(statusline_help, '%pub%', 'git', -1)
+    statusline_help = str.Replace(statusline_help, '%NAME%', NAME, -1)
+    cfg.AddRuntimeFileFromMemory(cfg.RTHelp, tostring(NAME) .. ".commands", commands_help)
+    cfg.AddRuntimeFileFromMemory(cfg.RTHelp, tostring(NAME) .. ".options", options_help)
+    return cfg.AddRuntimeFileFromMemory(cfg.RTHelp, tostring(NAME) .. ".statusline", statusline_help)
   end
-  options_help = str.Replace(options_help, '%pub%', 'git', -1)
-  options_help = str.Replace(options_help, '%NAME%', NAME, -1)
-  commands_help = str.Replace(commands_help, '%pub%', 'git', -1)
-  commands_help = str.Replace(commands_help, '%NAME%', NAME, -1)
-  statusline_help = str.Replace(statusline_help, '%pub%', 'git', -1)
-  statusline_help = str.Replace(statusline_help, '%NAME%', NAME, -1)
-  cfg.AddRuntimeFileFromMemory(cfg.RTHelp, tostring(NAME) .. ".commands", commands_help)
-  cfg.AddRuntimeFileFromMemory(cfg.RTHelp, tostring(NAME) .. ".options", options_help)
-  return cfg.AddRuntimeFileFromMemory(cfg.RTHelp, tostring(NAME) .. ".statusline", statusline_help)
-end
+end)()
 local wordify
 wordify = function(word, singular, plural)
   singular = word .. singular

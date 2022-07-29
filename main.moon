@@ -117,77 +117,66 @@ add_statusinfo = (name, fn, description) ->
   table.insert LOADED_LINEFNS.__order, name
 
 --- Generates the help page from the various registered components, and loads it
-generate_help = ->
-  commands_help = "# Microgit\n#{DESC}\n\n## Commands"
-  for name in *LOADED_COMMANDS.__order
-    debug "Adding #{name} to help"
-    command =  LOADED_COMMANDS[name]
-    commands_help ..= "\n* %pub%.#{name}"
-    continue if not command.help
-
+generate_help = (-> 
+  get_parser = (on_line_complete) ->
     on_line = 1
     margin = ''
+    parsed = ''
     
-    each_line command.help, (line, _, total) ->
+    _parse_line = (line, _, total) ->
       return if on_line == 1 and line\match"^%s*$"
       margin = line\match"^(%s*).+$" if on_line == 1
       line = line\gsub(margin, "", 1)
       return if (on_line >= total and line\match"^%s*$")
-      commands_help ..= "\n>  #{line}"
+      parsed ..= "\n>  #{line}"
       on_line += 1
-
-    commands_help ..= "\n"
-
-
-  options_help = "# Microgit\n#{DESC}\n\n## Options"
-  for name in *LOADED_OPTIONS.__order
-    debug "Adding #{name} to help"
-    options_help ..= "\n* %NAME%.#{name}"
-    continue if not LOADED_OPTIONS[name]
-
-    on_line = 1
-    margin = ''
     
-    each_line LOADED_OPTIONS[name], (line, _, total) ->
-      return if on_line == 1 and line\match"^%s*$"
-      margin = line\match"^(%s*).+$" if on_line == 1
-      line = line\gsub(margin, "", 1)
-      return if (on_line >= total and line\match"^%s*$")
-      options_help ..= "\n>  #{line}"
-      on_line += 1
+    _get_result = ->
+      parsed
 
-    options_help ..= "\n"
+    _parse_line, _get_result
+
+  return ->
+    commands_help = "# Microgit\n#{DESC}\n\n## Commands"
+    for name in *LOADED_COMMANDS.__order
+      debug "Adding #{name} to help"
+      commands_help ..= "\n* %pub%.#{name}"
+      continue if not LOADED_COMMANDS[name].help
+      parser, parser_result = get_parser!
+      each_line LOADED_COMMANDS[name].help, parser
+      commands_help ..= "#{parser_result!}\n"
+
+
+    options_help = "# Microgit\n#{DESC}\n\n## Options"
+    for name in *LOADED_OPTIONS.__order
+      debug "Adding #{name} to help"
+      options_help ..= "\n* %NAME%.#{name}"
+      continue if not LOADED_OPTIONS[name]
+      parser, parser_result = get_parser!
+      each_line LOADED_OPTIONS[name], parser
+      options_help ..= "#{parser_result!}\n"
+      
+
+    statusline_help = "# Microgit\n#{DESC}\n\n## Statusline Help"
+    for name in *LOADED_LINEFNS.__order
+      debug "Adding #{name} to help"
+      statusline_help ..= "\n* %NAME%.#{name}"
+      continue if not LOADED_LINEFNS[name]
+      parser, parser_result = get_parser!
+      each_line LOADED_LINEFNS[name], parser
+      statusline_help ..= "#{parser_result!}\n"
+
+    options_help = str.Replace options_help, '%pub%', 'git', -1
+    options_help = str.Replace options_help, '%NAME%', NAME, -1
+    commands_help = str.Replace commands_help, '%pub%', 'git', -1
+    commands_help = str.Replace commands_help, '%NAME%', NAME, -1    
+    statusline_help = str.Replace statusline_help, '%pub%', 'git', -1
+    statusline_help = str.Replace statusline_help, '%NAME%', NAME, -1
     
-
-  statusline_help = "# Microgit\n#{DESC}\n\n## Statusline Help"
-  for name in *LOADED_LINEFNS.__order
-    debug "Adding #{name} to help"
-    statusline_help ..= "\n* %NAME%.#{name}"
-    continue if not LOADED_LINEFNS[name]
-
-    on_line = 1
-    margin = ''
-    
-    each_line LOADED_LINEFNS[name], (line, _, total) ->
-      return if on_line == 1 and line\match"^%s*$"
-      margin = line\match"^(%s*).+$" if on_line == 1
-      line = line\gsub(margin, "", 1)
-      return if (on_line >= total and line\match"^%s*$")
-      statusline_help ..= "\n>  #{line}"
-      on_line += 1
-
-    statusline_help ..= "\n"
-
-  options_help = str.Replace options_help, '%pub%', 'git', -1
-  options_help = str.Replace options_help, '%NAME%', NAME, -1
-  commands_help = str.Replace commands_help, '%pub%', 'git', -1
-  commands_help = str.Replace commands_help, '%NAME%', NAME, -1    
-  statusline_help = str.Replace statusline_help, '%pub%', 'git', -1
-  statusline_help = str.Replace statusline_help, '%NAME%', NAME, -1
-  
-  cfg.AddRuntimeFileFromMemory cfg.RTHelp, "#{NAME}.commands", commands_help
-  cfg.AddRuntimeFileFromMemory cfg.RTHelp, "#{NAME}.options", options_help
-  cfg.AddRuntimeFileFromMemory cfg.RTHelp, "#{NAME}.statusline", statusline_help
+    cfg.AddRuntimeFileFromMemory cfg.RTHelp, "#{NAME}.commands", commands_help
+    cfg.AddRuntimeFileFromMemory cfg.RTHelp, "#{NAME}.options", options_help
+    cfg.AddRuntimeFileFromMemory cfg.RTHelp, "#{NAME}.statusline", statusline_help
+)!
 
 --- Generate a function that takes a number, and returns the correct plurality of a word
 wordify = (word, singular, plural) ->
