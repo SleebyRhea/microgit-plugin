@@ -27,6 +27,7 @@ ioutil = go.import"ioutil"
 regexp = go.import"regexp"
 runtime = go.import"runtime"
 
+ACTIVE_UPDATES = {}
 ACTIVE_COMMITS = {}
 BRANCH_STATUS = {}
 BUFFER_BRANCH = {}
@@ -39,14 +40,15 @@ bound  = (n, min, max) -> n > max and max or (n < min and min or n)
 debug  = (m) -> app.Log "#{NAME}: #{m}"
 truthy = (v) -> if v then return true else false
 errors = {
-  is_a_repo: "the current directory is already a repository"
-  not_a_repo: "the current directory is not a repository"
+  is_a_repo: "the current file is already in a repository"
+  not_a_repo: "the current file is not in a repository"
   invalid_arg: "invalid_argument provided"
   bad_label_arg: "invalid argument, please provide a valid rev label"
   not_enough_args: "not enough arguments"
   unknown_label: "given label is not known to this repo"
   command_not_found: "invalid command provided (not a command)"
   no_help: "FIXME: no help for command git."
+  no_scratch: "this cannot be run out of a temporary pane"
 }
 
 
@@ -54,6 +56,20 @@ errors = {
 chomp = (s) ->
   s = s\gsub("^%s*", "")\gsub("%s*$", "")\gsub("[\n\r]*$", "")
   return s
+
+
+--- Reimplementation of util.ReplaceHome, as it's not exposed to lua
+replace_home = (_path) ->
+  switch true
+    when truthy str.HasPrefix(_path, "~")
+      home, err = os.UserHomeDir!
+      return nil, err if err
+      return str.Replace _path, "~", 1
+    when truthy str.HasPrefix(_path, "%USERPROFILE%")
+      home, err = os.UserHomeDir!
+      return nil, err if err
+      return str.Replace _path, "%USERPROFILE%", 1
+  return _path
 
 
 --- Run a given function for each line in a string
@@ -76,6 +92,39 @@ each_line = (input, fn) ->
 
   return finish_ret, finish_err
 
+-- filepath.Abs and filepath.IsAbs both exist, however, their use in Lua code
+-- here currently panics the application. Until then, we'll just have to rely
+-- on something hacky in the meantime. This is pretty gross, but it works.
+get_path_info = (->
+  s = string.char os.PathSeparator
+
+  re_abs  = regexp.MustCompile("^#{runtime.GOOS == 'windows' and '[a-zA-Z]:' or ''}#{s}#{s}?.+#{s}#{s}?.*")
+  re_part = regexp.MustCompile("#{s}#{s}?")
+  re_root = regexp.MustCompile("^#{runtime.GOOS == 'windows' and '[a-zA-Z]:' or ''}#{s}#{s}?$")
+
+  return (_string) ->
+    pwd, err = os.Getwd!
+    assert not err, "failed to get current working directory"
+
+    -- String is just the root filepath (ie; /)
+    if re_root\Match _string
+      return _string, _string, _string, pwd
+
+    -- String is absolute (ie; /path/to/file)
+    if re_abs\Match _string
+      split_path = re_part\Split _string, -1
+      l = #split_path
+      name = split_path[bound(l, 1, l)]
+      return _string, str.TrimSuffix(_string, name), name, pwd
+
+    -- String is relative (ie; path/to/file)
+    abs = (pwd .. s .. _string)
+    split_path = re_part\Split abs, -1
+    l = #split_path
+    name = split_path[bound(l, 1, l)]
+    return abs, str.TrimSuffix(abs, name), name, pwd
+)!
+
 --- Register a provided function+callback as a command
 -- Wraps the given function to account for Micros handling of arguments placing
 -- additional arguments of len size > 1 in a Go array
@@ -84,19 +133,23 @@ add_command = (name, fn, cb) ->
 
   external_name = "git.#{name}"
   cmd = (any, extra) ->
-    debug "command[#{external_name}] started"
-    if extra
-      fn any, unpack([a for a in *extra])
-    else
-      fn any
-    debug "command[#{external_name}] completed"
+    local _path, _buf
 
     if any and any.Buf then
-      git.update_branch_status any.Buf
-      git.update_git_diff_base any.Buf
-    elseif any.Path
-      git.update_branch_status any
-      git.update_git_diff_base any
+      _buf = any.Buf
+    else
+      _buf = any
+
+    local dir, abs, name, pwd, _finfo
+    if _buf.Path and _buf.Path != ''
+      abs, dir, name, pwd = get_path_info _buf.Path
+      _finfo = { :dir, :abs, :name, :pwd }
+    
+    debug "command[#{external_name}] started"
+    fn any, _finfo, unpack([a for a in *(extra or {})])  
+    git.update_branch_status _buf, _finfo
+    git.update_git_diff_base _buf, _finfo
+    debug "command[#{external_name}] completed"
     
     return
 
@@ -272,8 +325,7 @@ make_empty_pane = (root, rszfn, header) ->
   return pane
 
 
-
---- Create a new readonly scratch pane with the contents of output. Add that
+--- Create a new pane with the contents of output. Add that
 -- pane to the list of ACTIVE_COMMITS, and write the contents of output to
 -- a temporary file.
 --
@@ -318,58 +370,46 @@ make_commit_pane = (root, output, header, fn) ->
   }
 
 
--- filepath.Abs and filepath.IsAbs both exist, however, their use in Lua code
--- here currently panics the application. Until then, we'll just have to rely
--- on something hacky in the meantime. This is pretty gross, but it works.
-get_path_info = (->
-  s = string.char os.PathSeparator
-
-  re_abs  = regexp.MustCompile("^#{runtime.GOOS == 'windows' and '[a-zA-Z]:' or ''}#{s}#{s}?.+#{s}#{s}?.*")
-  re_part = regexp.MustCompile("#{s}#{s}?")
-  re_root = regexp.MustCompile("^#{runtime.GOOS == 'windows' and '[a-zA-Z]:' or ''}#{s}#{s}$")
-
-  return (_string) ->
-    if re_root\Match _string
-      debug "get_path_info: #{_string} matched regexp[#{re_root\String!}]"
-      return _string, _string, _string
-    
-    if re_abs\Match _string
-      debug "get_path_info: #{_string} matched regexp[#{re_abs\String!}]"
-      split_path = re_part\Split _string, -1
-      l = #split_path
-      return _string, str.TrimSuffix(_string, split_path[bound(l, 1, l)]), split_path[bound(l, 1, l)]
-
-    debug "get_path_info: #{_string} is relative"
-    pwd, err = os.Getwd!
-    assert not err, "failed to get current working directory"
-    abs = (pwd .. s .. _string)
-    split_path = re_part\Split abs, -1
-    l = #split_path
-    
-    return abs, pwd, split_path[bound(l, 1, l)]
-)!
-
-
 git = (->
   w_commit  = wordify 'commit', '', 's'
   w_line    = wordify 'line', '', 's'
   re_commit = regexp.MustCompile"^commit[\\s]+([^\\s]+).*$"
+  is_scratch = => @Type.Scratch
 
-  --- Generate a new git command context for the filepath. All git commands
-  -- run through this context will run with -C "filepath"
-  new_command = (filepath) ->
-    if type(filepath) != 'string' or filepath == ''
-      debug "filepath [#{filepath}] is not a valid editor path (need string): (got: #{type filepath})"
+  --- Issue a message to the buffer with a neat syntax.
+  -- If a string has more than one line, use a pane. Otherwise, issue a message
+  -- via the infobar
+  send = setmetatable {}, __index: (_, cmd) ->
+    cmd = cmd\gsub "_", "-"
+    (msg, config) ->
+      debug "git-#{cmd}: Issuing message - #{msg}"
+      line_count = select(2, string.gsub(tostring(msg), "[\r\n]", ""))
+
+      debug "LineCount: #{line_count}"
+      if line_count > 1
+        header = "git-#{cmd}"
+        if type(config) == "table"
+          if config.header != nil
+            header = "#{header}: #{config.header}"
+        send_block header, msg
+        return
+
+      (app.InfoBar!)\Message "git-#{cmd}: #{msg}"
+      return
+
+  --- Generate a new git command context for the directory. All git commands
+  -- run through this context will run with -C "directory"
+  new_command = (directory) ->
+    if type(directory) != 'string' or directory == ''
+      debug "filepath '#{filepath}' is not a valid editor path (need non-empty string): (got: #{type filepath})"
       return nil, "Please run this in a file pane"
 
-    abs, dir, name = get_path_info filepath
-
     --- Execute a git command with arguments and return the output
-    exec = (...) ->
-      unless path_exists dir
-        return nil, "directory #{dir} does not exist"
+    exec = (command, ...) ->
+      unless path_exists directory
+        return nil, "directory #{directory} does not exist"
 
-      debug "Parent directory #{dir} exists, continuing ..."
+      debug "Parent directory #{directory} exists, continuing ..."
       base = cfg.GetGlobalOption "#{NAME}.command"
       if base == ""
         base, _ = shl.ExecCommand "command", "-v", "git"
@@ -381,18 +421,17 @@ git = (->
       unless path_exists base
         return nil, err.Error!
 
-      debug "Running ..."
-      out = shl.ExecCommand base, "-C", dir, ...
+      out = shl.ExecCommand base, "-C", directory, command, ...
       return out
 
 
     --- Execute the git command with arguments in the background, and fill a new
     -- pane with the contents of it's stdout.
     exec_async = (cmd, ...) =>
-      unless path_exists dir
-        return nil, "directory #{dir} does not exist"
+      unless path_exists directory
+        return nil, "directory #{directory} does not exist"
 
-      debug "Parent directory #{dir} exists, continuing ..."
+      debug "Parent directory #{directory} exists, continuing ..."
       base = cfg.GetGlobalOption "#{NAME}.command"
       if base == ""
         base, _ = shl.ExecCommand "command", "-v", "git"
@@ -417,14 +456,45 @@ git = (->
 
       args = {...}
       table.insert args, 1, cmd
+      table.insert args, 1, directory
+      table.insert args, 1, "-C"
       shl.JobSpawn base, args, on_emit, on_emit, on_exit
       return "", nil
 
+    exec_async_cb = (cmd, on_stdout, on_stderr, on_exit, ...) ->
+      unless path_exists directory
+        return nil, "directory #{directory} does not exist"
+
+      debug "Parent directory #{directory} exists, continuing ..."
+      base = cfg.GetGlobalOption "#{NAME}.command"
+      if base == ""
+        base, _ = shl.ExecCommand "command", "-v", "git"
+        base = chomp base
+        if base == '' or not base
+          return nil, "no git configured"
+
+      debug "Found valid git path: #{base}"
+      unless path_exists base
+        return nil, err.Error!
+
+      on_stdout = assert on_stdout, "exec_async_cb requires an on_stdout callback"
+      on_stderr = assert on_stderr, "exec_async_cb requires an on_stderr callback"
+      on_exit = assert on_exit, "exec_async_cb requires an on_exit callback"
+
+      args = {...}
+      table.insert args, 1, cmd
+      table.insert args, 1, directory
+      table.insert args, 1, "-C"
+      debug "Launching: #{base} #{str.Join args, " "}"
+      shl.JobSpawn base, args, on_stdout, on_stderr, on_exit
+      return
+    
+
     --- Return true or false dependent on whether or not the context is a repo
     in_repo = ->
-      out, _ = exec "rev-parse", "--is-inside-work-tree"
+      out, err = exec "rev-parse", "--is-inside-work-tree"
+      return send.in_repo err if err
       return chomp(out) == 'true'
-
 
     --- Parse all of the known branches and return both those branches, and the 
     -- name of the current branch
@@ -463,60 +533,33 @@ git = (->
         return false, err
       return chomp(out)
 
-    return { :new, :exec, :exec_async, :in_repo, :known_label, :get_branches }
-
-
-  --- Issue a message to the buffer with a neat syntax.
-  -- If a string has more than one line, use a pane. Otherwise, issue a message
-  -- via the infobar
-  send = setmetatable {}, __index: (_, cmd) ->
-    cmd = cmd\gsub "_", "-"
-    (msg, config) ->
-      line_count = select(2, string.gsub(tostring(msg), "[\r\n]", ""))
-
-      debug "LineCount: #{line_count}"
-      if line_count > 1
-        header = "git-#{cmd}"
-        if type(config) == "table"
-          if config.header != nil
-            header = "#{header}: #{config.header}"
-        send_block header, msg
-        return
-
-      (app.InfoBar!)\Message "git-#{cmd}: #{msg}"
-      return
+    return {
+      :new, :exec, :exec_async,
+      :exec_async_cb, :in_repo,
+      :known_label, :get_branches
+    }
 
 
   --- Update branch tracked branch information for a buffer
-  update_branch_status = (cmd) =>
-    debug "update_branch_status: Update initiated"
-
-    unless @Path
-      debug "update_branch_status: was called with a non-buffer object!"
-      return
-    
+  update_branch_status = (finfo, cmd) =>
     return unless truthy cfg.GetGlobalOption "#{NAME}.updateinfo"
-    return unless (not @Type.Scratch) and (@Path != '')
-    
-    debug "update_branch_status: Beginning update process for #{self}"
+    return unless (not @Type.Scratch) and (@Path != '') and finfo
 
+    debug "update_branch_status: Beginning update process for #{self}"
     unless cmd
-      cmd, err = new_command @Path
+      cmd, err = new_command finfo.dir
       return send.updater (err .. " (to suppress this message, set #{NAME}.updateinfo to false)") unless cmd    
 
-    local branch
-
     debug "update_branch_status: Getting branch label ..."
-
     return unless cmd.in_repo!
-    out, err = cmd.exec "branch", "--show-current"
-    unless err
-      branch = chomp out
-    else
-      return
-
-    BUFFER_BRANCH[@Path] = branch
-    BRANCH_STATUS[branch] = { 
+    branch, err = cmd.exec "branch", "--show-current"
+    return if err
+    
+    branch = chomp branch
+    BUFFER_BRANCH[finfo.abs] = branch
+    return unless branch
+    
+    BRANCH_STATUS[branch] = BRANCH_STATUS[branch] or { 
       name: (branch or '')
       ahead: "-"
       behind: "-"
@@ -524,58 +567,100 @@ git = (->
       :commit
     }
 
-    return unless branch
+    return if BRANCH_STATUS[branch].__updating
+    BRANCH_STATUS[branch].__updating = true
 
-    debug "update_branch_status: Getting HEAD short hash ..."
-    out, err = cmd.exec "rev-parse", "--short", branch
-    unless err
-      BRANCH_STATUS[branch].commit = chomp out
+    diff_string  = ''
+    short_commit = ''
+    count_staged = ''
+    count_behind = 0
+    count_ahead  = 0
 
-    if branch
-      debug "update_branch_status: Getting revision count differences"
-      out, err = cmd.exec "rev-list", "--left-right", "--count", "origin/#{branch}...#{branch}"
-      unless err
-        a, b = (chomp out)\match("^(%d+)%s+(%d+)$")
-        BRANCH_STATUS[branch].ahead = a or "-"
-        BRANCH_STATUS[branch].behind = b or "-"
+    debug "update_branch_status: Generating diff finalizer fn ..."
+    finish_update = ->
+      count_staged = select(2, (chomp count_staged)\gsub("([^%s\r\n]+)", ''))
+      BRANCH_STATUS[branch] = {
+        __updating: false
+        staged: count_staged
+        commit: short_commit
+        behind: count_behind
+        ahead: count_ahead
+        name: branch
+      }
 
-    debug "update_branch_status: Getting staged count"
-    out, err = cmd.exec "diff", "--name-only", "--cached"
-    unless err
-      staged = select(2, (chomp out)\gsub("([^%s\r\n]+)", ''))
-      BRANCH_STATUS[branch].staged = staged
+    start_get_countstaged = ->
+      a, b = (chomp diff_string)\match("^(%d+)%s+(%d+)$")
+      count_ahead, count_behind = (a or "-"), (b or "-")
+      cmd.exec_async_cb "diff",
+        ((out) -> count_staged ..= out),
+        ((out) -> count_staged ..= out),
+        finish_update,
+        "--name-only",
+        "--cached"
+        
+    start_get_diffstring = ->
+      short_commit = chomp(short_commit)
+      cmd.exec_async_cb "rev-list",
+        ((out) -> diff_string ..= out),
+        ((out) -> diff_string ..= out),
+        start_get_countstaged,
+        "--left-right",
+        "--count",
+        ("origin/#{branch}...#{branch}")
 
-    debug "update_branch_status: Done"
+    cmd.exec_async_cb "rev-parse",
+      ((out) -> short_commit ..= out),
+      ((out) -> short_commit ..= out),
+      start_get_diffstring,
+      "--short",
+      branch
 
 
   suppress = " (to suppress this message, set #{NAME}.gitgutter to false)"
-  update_git_diff_base = (cmd) =>
-    unless @Path
-      debug "update_git_diff_base: was called with a non-buffer object!"
-      return
-    
+  update_git_diff_base = (finfo, cmd) =>
     return unless truthy cfg.GetGlobalOption "#{NAME}.gitgutter"
-    return unless (not @Type.Scratch) and (@Path != '')
-    
-    debug "update_git_diff_base: Beginning update process for #{self}"
+    return unless @Settings["diffgutter"] and finfo and (not @Type.Scratch) and (@Path != '')
 
+    return if ACTIVE_UPDATES[finfo.abs]
+    ACTIVE_UPDATES[finfo.abs] = true
+
+    debug "update_branch_status: Beginning update process for #{self}"
     unless cmd
-      cmd, err = new_command @Path
+      cmd, err = new_command finfo.dir
       return send.diffupdate "#{err}#{suppress}" unless cmd  
 
     return unless cmd.in_repo!
-    base, err = cmd.exec "show", ":./"..@Path
-    base = @Bytes! if err != nil
-    @SetDiffBase base
-    debug "update_git_diff_base: updated diff base"
-    
+
+    repo_relative_path = ''
+    top_level = ''
+    diff_base = ''
+
+    start_set_diffbase = ->
+      diff_base = @Bytes! unless diff_base and diff_base != ''
+      @SetDiffBase diff_base
+      ACTIVE_UPDATES[finfo.abs] = false
+
+    start_get_diffbase = ->
+      repo_relative_path = str.TrimPrefix finfo.abs, chomp(top_level)
+      cmd.exec_async_cb "show",
+        ((out) -> diff_base ..= out),
+        ((out) -> diff_base ..= out),
+        start_set_diffbase,
+        ":./#{repo_relative_path}"
+
+    cmd.exec_async_cb "rev-parse",
+      ((out) -> top_level ..= out),
+      ((out) -> top_level ..= out),
+      start_get_diffbase,
+      "--show-toplevel"  
 
   return {
     :update_branch_status
     :update_git_diff_base
       
-    init: =>
-      cmd, err = new_command @Buf.Path
+    init: (finfo) =>
+      return send.init errors.no_scratch if is_scratch @Buf
+      cmd, err = new_command finfo.dir
       unless cmd
         return send.init err
       
@@ -590,15 +675,18 @@ git = (->
         Initialize a repository in the current panes directory
     ]]
 
-    diff: =>
-      cmd, err = new_command @Buf.Path
+    diff: (finfo) =>
+      return send.init errors.no_scratch if is_scratch @Buf
+      cmd, err = new_command finfo.dir
       unless cmd
         return send.diff err
 
       unless cmd.in_repo!
         return send.diff errors.not_a_repo
 
-      out, err = cmd.exec "diff", @Buf.Path
+      repo_relative_path = str.TrimPrefix finfo.abs, finfo.pwd
+      repo_relative_file = str.TrimPrefix @Buf.Path, repo_relative_path
+      out, err = cmd.exec "diff", repo_relative_file
       return send.diff err if err
       send.diff out
 
@@ -607,8 +695,9 @@ git = (->
         Git diff HEAD for the current file
     ]]
     
-    fetch: =>
-      cmd, err = new_command @Buf.Path
+    fetch: (finfo) =>
+      return send.init errors.no_scratch if is_scratch @Buf
+      cmd, err = new_command finfo.dir
       unless cmd
         return send.fetch err
       unless cmd.in_repo!
@@ -625,8 +714,9 @@ git = (->
     checkout: (->
       re_valid_label = regexp.MustCompile"^[a-zA-Z-_/.]+$"
 
-      return (label) =>
-        cmd, err = new_command @Buf.Path
+      return (finfo, label) =>
+        return send.init errors.no_scratch if is_scratch @Buf
+        cmd, err = new_command finfo.dir
         unless cmd
           return send.checkout err
         
@@ -652,8 +742,9 @@ git = (->
         Checkout a specific branch, tag, or revision
     ]]
 
-    list: =>
-      cmd, err = new_command @Buf.Path
+    list: (finfo) =>
+      return send.init errors.no_scratch if is_scratch @Buf
+      cmd, err = new_command finfo.dir
       unless cmd
         return send.list err
       
@@ -679,8 +770,9 @@ git = (->
     ]]
 
       
-    status: =>
-      cmd, err = new_command @Buf.Path
+    status: (finfo) =>
+      return send.init errors.no_scratch if is_scratch @Buf
+      cmd, err = new_command finfo.dir
       unless cmd
         return send.status err
     
@@ -699,8 +791,9 @@ git = (->
     branch: (->
       re_valid_label = regexp.MustCompile"^[a-zA-Z-_/.]+$"
 
-      return (label) =>
-        cmd, err = new_command @Buf.Path
+      return (finfo, label) =>
+        return send.init errors.no_scratch if is_scratch @Buf
+        cmd, err = new_command finfo.dir
         unless cmd
           return send.branch err
         
@@ -738,8 +831,9 @@ git = (->
       base_msg ..= "# Please enter the commit message for your changes. Lines starting\n"
       base_msg ..= "# with '#' will be ignored, and an empty message aborts the commit.\n#\n"
 
-      return (msg) =>
-        cmd, err = new_command @Buf.Path
+      return (finfo, msg) =>
+        return send.init errors.no_scratch if is_scratch @Buf
+        cmd, err = new_command finfo.dir
         unless cmd
           return send.commit err
       
@@ -769,7 +863,6 @@ git = (->
           each_line chomp(commit_msg), (line) ->
             return if line == nil
             
-            line = chomp line
             if msg_line\Match line
               final_commit ..= "#{line}\n"
 
@@ -796,8 +889,9 @@ git = (->
     push: (->
       re_valid_label = regexp.MustCompile"^[a-zA-Z-_/.]+$"
       
-      return (branch) =>
-        cmd, err = new_command @Buf.Path
+      return (finfo, branch) =>
+        return send.init errors.no_scratch if is_scratch @Buf
+        cmd, err = new_command finfo.dir
         unless cmd
           return send.push err
       
@@ -822,8 +916,8 @@ git = (->
         are pushed.
     ]]
 
-    pull: =>
-      cmd, err = new_command @Buf.Path
+    pull: (finfo) =>
+      cmd, err = new_command finfo.dir
       unless cmd
         return send.pull err
       
@@ -839,8 +933,9 @@ git = (->
         Pull all changes from remote into the working tree
     ]]
 
-    log: =>
-      cmd, err = new_command @Buf.Path
+    log: (finfo) =>
+      return send.init errors.no_scratch if is_scratch @Buf
+      cmd, err = new_command finfo.dir
       unless cmd
         return send.log err
       
@@ -862,8 +957,9 @@ git = (->
         Show the commit log
     ]]
 
-    stage: (...) =>
-      cmd, err = new_command @Buf.Path
+    stage: (finfo, ...) =>
+      return send.init errors.no_scratch if is_scratch @Buf
+      cmd, err = new_command finfo.dir
       unless cmd
         return send.stage err
 
@@ -877,6 +973,8 @@ git = (->
           files = { "." }
           break
 
+        file, err = replace_home file
+        return send.stage err if err
         unless path_exists file
           return send.stage errors.invalid_arg .. "(file #{file} doesn't exist)"
 
@@ -895,8 +993,9 @@ git = (->
         --all   Stage all files
     ]]
 
-    unstage: (...) =>
-      cmd, err = new_command @Buf.Path
+    unstage: (finfo, ...) =>
+      return send.init errors.no_scratch if is_scratch @Buf
+      cmd, err = new_command finfo.dir
       unless cmd
         return send.unstage err
 
@@ -911,7 +1010,9 @@ git = (->
           files = {}
           all = true
           break
-
+          
+        file, err = replace_home file
+        return send.unstage err if err
         unless path_exists file
           return send.unstage errors.invalid_arg .. "(file #{file} doesn't exist)"
 
@@ -930,8 +1031,9 @@ git = (->
         --all   Unstage all files
     ]]
 
-    rm: (...) =>
-      cmd, err = new_command @Buf.Path
+    rm: (finfo, ...) =>
+      return send.init errors.no_scratch if is_scratch @Buf
+      cmd, err = new_command finfo.dir
       unless cmd
         return send.rm err
 
@@ -945,6 +1047,8 @@ git = (->
           files = { "." }
           break
 
+        file, err = replace_home file
+        return send.rm err if err
         unless path_exists file
           return send.rm errors.invalid_arg .. "(file #{file} doesn't exist)"
 
@@ -963,27 +1067,38 @@ git = (->
 )!
 
 export numahead = =>
-  return "-" unless BUFFER_BRANCH[@Path]
-  return "-" unless BRANCH_STATUS[BUFFER_BRANCH[@Path]]
-  return tostring BRANCH_STATUS[BUFFER_BRANCH[@Path]].ahead
+  return "-" unless @Path and @Path != ''
+  abs = get_path_info @Path
+  return "-" unless BUFFER_BRANCH[abs]
+  return "-" unless BRANCH_STATUS[BUFFER_BRANCH[abs]]
+  return tostring BRANCH_STATUS[BUFFER_BRANCH[abs]].ahead
 
 export numbehind = =>
-  return "-" unless BUFFER_BRANCH[@Path]
-  return "-" unless BRANCH_STATUS[BUFFER_BRANCH[@Path]]
-  return tostring BRANCH_STATUS[BUFFER_BRANCH[@Path]].behind
+  return "-" unless @Path and @Path != ''
+  abs = get_path_info @Path
+  return "-" unless BUFFER_BRANCH[abs]
+  return "-" unless BRANCH_STATUS[BUFFER_BRANCH[abs]]
+  return tostring BRANCH_STATUS[BUFFER_BRANCH[abs]].behind
 
 export numstaged = =>
-  return "-" unless BUFFER_BRANCH[@Path]
-  return "-" unless BRANCH_STATUS[BUFFER_BRANCH[@Path]]
-  return tostring BRANCH_STATUS[BUFFER_BRANCH[@Path]].staged
+  return "-" unless @Path and @Path != ''
+  abs = get_path_info @Path
+  return "-" unless BUFFER_BRANCH[abs]
+  return "-" unless BRANCH_STATUS[BUFFER_BRANCH[abs]]
+  return tostring BRANCH_STATUS[BUFFER_BRANCH[abs]].staged
 
 export oncommit = =>
-  return "-" unless BUFFER_BRANCH[@Path]
-  return "-" unless BRANCH_STATUS[BUFFER_BRANCH[@Path]]
-  return tostring BRANCH_STATUS[BUFFER_BRANCH[@Path]].commit
+  return "-" unless @Path and @Path != ''
+  abs = get_path_info @Path
+  return "-" unless BUFFER_BRANCH[abs]
+  return "-" unless BRANCH_STATUS[BUFFER_BRANCH[abs]]
+  return tostring BRANCH_STATUS[BUFFER_BRANCH[abs]].commit
 
 export onbranch = =>
-  return tostring(BUFFER_BRANCH[@Path] or "")
+  return "-" unless @Path and @Path != ''
+  abs = get_path_info @Path
+  return "-" unless BUFFER_BRANCH[abs]
+  return tostring(BUFFER_BRANCH[abs] or "")
 
 export preinit = ->
   add_config "command", "", [[
@@ -1057,6 +1172,7 @@ export init = ->
   add_command "commit", git.commit, cfg.NoComplete
   add_command "status", git.status, cfg.NoComplete
   add_command "branch", git.branch, cfg.NoComplete
+  add_command "fetch", git.fetch, cfg.NoComplete
   add_command "checkout", git.checkout, cfg.NoComplete
   add_command "stage", git.stage, cfg.FileComplete
   add_command "unstage", git.unstage, cfg.FileComplete
@@ -1069,15 +1185,20 @@ export init = ->
 --- Populate branch tracking information for the buffer
 export onBufPaneOpen = =>
   debug "Caught onBufPaneOpen bufpane:#{self}"
-  git.update_branch_status @Buf
-  git.update_git_diff_base @Buf
+  abs, dir, name, pwd = get_path_info @Buf.Path
+  _finfo = {:dir, :abs, :name, :pwd}
+  git.update_branch_status @Buf, _finfo
+  git.update_git_diff_base @Buf, _finfo
+  return
 
 --- Update branch tracking for the buffer, and if its a commit pane mark it as
 -- ready to commit
 export onSave = =>
   debug "Caught onSave bufpane:#{self}"
-  git.update_branch_status @Buf
-  git.update_git_diff_base @Buf
+  abs, dir, name, pwd = get_path_info @Buf.Path
+  _finfo = {:dir, :abs, :name, :pwd}
+  git.update_branch_status @Buf, _finfo
+  git.update_git_diff_base @Buf, _finfo
   return unless #ACTIVE_COMMITS > 0
 
   for i, commit in ipairs ACTIVE_COMMITS
@@ -1086,14 +1207,18 @@ export onSave = =>
       commit.ready = true
       break
 
+  return
+
 --- Remove a buffers path from tracking, and if we are in a commit pane call its
 -- callback function if it's been modified and saved. Alternatively, hijack the
 -- commit save prompt and offer a confirmation to save and commit.
 export onQuit = =>
   debug "Caught onQuit, buf:#{@}"
 
-  if @Path and BUFFER_BRANCH[@Path]
-    BUFFER_BRANCH[@Path] = nil
+  if @Path and @Path != ''
+    _, abs, _ = get_path_info @Path
+    if BUFFER_BRANCH[abs]
+      BUFFER_BRANCH[abs] = nil
     
   return unless #ACTIVE_COMMITS > 0
 
@@ -1152,3 +1277,4 @@ export onQuit = =>
                 @ForceQuit!
               return
         break
+  return
