@@ -2,6 +2,8 @@ export VERSION = "1.0.0"
 export NAME    = 'microgit'
 export DESC    = 'Git for Micro'
 
+local git
+
 -- Workaround for import being a keyword in Moonscript
 go = assert loadstring([[
   -- script: lua
@@ -33,7 +35,10 @@ LOADED_COMMANDS = { __order: {} } unless LOADED_COMMANDS
 LOADED_OPTIONS = { __order: {} } unless LOADED_OPTIONS
 LOADED_LINEFNS = { __order: {} } unless LOADED_LINEFNS
 
-errors =
+bound  = (n, min, max) -> n > max and max or (n < min and min or n)
+debug  = (m) -> app.Log "#{NAME}: #{m}"
+truthy = (v) -> if v then return true else false
+errors = {
   is_a_repo: "the current directory is already a repository"
   not_a_repo: "the current directory is not a repository"
   invalid_arg: "invalid_argument provided"
@@ -42,10 +47,8 @@ errors =
   unknown_label: "given label is not known to this repo"
   command_not_found: "invalid command provided (not a command)"
   no_help: "FIXME: no help for command git."
+}
 
-local git
-bound = (n, min, max) -> n > max and max or (n < min and min or n)
-debug = (m) -> app.Log "#{NAME}: #{m}"
 
 --- Delete leading and trailing spaces, and the final newline
 chomp = (s) ->
@@ -60,13 +63,18 @@ each_line = (input, fn) ->
   lines = str.Split(input, "\n")
   l_count = #lines
 
+  local finish_ret, finish_err
   stop = false
-  finish = -> stop = true
+  finish = (v, err) ->
+    stop = true
+    finish_ret = v
+    finish_err = err if err
 
   for i = 1, l_count
-    return if stop
-
+    break if stop
     fn lines[i], i, l_count, finish
+
+  return finish_ret, finish_err
 
 --- Register a provided function+callback as a command
 -- Wraps the given function to account for Micros handling of arguments placing
@@ -116,13 +124,11 @@ add_statusinfo = (name, fn, description) ->
   LOADED_LINEFNS[name] = description
   table.insert LOADED_LINEFNS.__order, name
 
---- Generates the help page from the various registered components, and loads it
+--- Generates our help pages for the various registered components and loads them
 generate_help = (-> 
-  get_parser = (on_line_complete) ->
-    on_line = 1
-    margin = ''
-    parsed = ''
-    
+  get_parser = ->
+    on_line, margin, parsed = 1, '', ''
+    _get_result = -> parsed
     _parse_line = (line, _, total) ->
       return if on_line == 1 and line\match"^%s*$"
       margin = line\match"^(%s*).+$" if on_line == 1
@@ -130,11 +136,7 @@ generate_help = (->
       return if (on_line >= total and line\match"^%s*$")
       parsed ..= "\n>  #{line}"
       on_line += 1
-    
-    _get_result = ->
-      parsed
-
-    _parse_line, _get_result
+    return _parse_line, _get_result
 
   return ->
     commands_help = "# Microgit\n#{DESC}\n\n## Commands"
@@ -146,7 +148,6 @@ generate_help = (->
       each_line LOADED_COMMANDS[name].help, parser
       commands_help ..= "#{parser_result!}\n"
 
-
     options_help = "# Microgit\n#{DESC}\n\n## Options"
     for name in *LOADED_OPTIONS.__order
       debug "Adding #{name} to help"
@@ -155,7 +156,6 @@ generate_help = (->
       parser, parser_result = get_parser!
       each_line LOADED_OPTIONS[name], parser
       options_help ..= "#{parser_result!}\n"
-      
 
     statusline_help = "# Microgit\n#{DESC}\n\n## Statusline Help"
     for name in *LOADED_LINEFNS.__order
@@ -169,7 +169,7 @@ generate_help = (->
     options_help = str.Replace options_help, '%pub%', 'git', -1
     options_help = str.Replace options_help, '%NAME%', NAME, -1
     commands_help = str.Replace commands_help, '%pub%', 'git', -1
-    commands_help = str.Replace commands_help, '%NAME%', NAME, -1    
+    commands_help = str.Replace commands_help, '%NAME%', NAME, -1
     statusline_help = str.Replace statusline_help, '%pub%', 'git', -1
     statusline_help = str.Replace statusline_help, '%NAME%', NAME, -1
     
@@ -194,14 +194,13 @@ path_exists = (filepath) ->
 
 make_temp = (->
   rand = go.import "math/rand"
-  
   chars = 'qwertyuioasdfghjklzxcvbnm'
-  return ->
+  return (header='XXX') ->
     dir = path.Join "#{cfg.ConfigDir}", "tmp"
     err = os.MkdirAll(dir, 0x1F8) -- 770, to account for octal
     assert not err, err
     
-    file = ("#{NAME}.commit.") .. ("XXXXXXXXXXXX")\gsub '[xX]', =>
+    file = ("#{NAME}.#{header}.") .. ("XXXXXXXXXXXX")\gsub '[xX]', =>
       i = rand.Intn(25) + 1
       c = chars\sub i, i
       switch @
@@ -281,7 +280,7 @@ make_commit_pane = (root, output, header, fn) ->
   old_view = root\GetView!
   h = old_view.Height
 
-  filepath = make_temp!
+  filepath = make_temp 'commit'
 
   debug "Populating temporary commit file #{filepath} ..."
   ioutil.WriteFile filepath, output, 0x1B0 -- 0660, to account for octal
@@ -560,6 +559,23 @@ git = (->
     init_help: [[
       Usage: %pub%.init
         Initialize a repository in the current panes directory
+    ]]
+
+    diff: =>
+      cmd, err = new_command @Buf.Path
+      unless cmd
+        return send.diff err
+
+      unless cmd.in_repo!
+        return send.diff errors.not_a_repo
+
+      out, err = cmd.exec "diff", @Buf.Path
+      return send.diff err if err
+      send.diff out
+
+    diff_help: [[
+      Usage: %pub%.diff
+        Git diff HEAD for the current file
     ]]
     
     fetch: =>
@@ -980,7 +996,7 @@ export preinit = ->
   ]]
 
   debug "Clearing stale commit files ..."
-  pfx = "#{NAME}.commit."
+  pfx = "#{NAME}."
   dir = path.Join "#{cfg.ConfigDir}", "tmp"
 
   files, err = ioutil.ReadDir dir
@@ -1013,6 +1029,7 @@ export init = ->
   add_command "stage", git.stage, cfg.FileComplete
   add_command "unstage", git.unstage, cfg.FileComplete
   add_command "rm", git.rm, cfg.FileComplete
+  add_command "diff", git.diff, cfg.FileComplete
 
   generate_help!
 

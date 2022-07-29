@@ -1,6 +1,7 @@
 VERSION = "1.0.0"
 NAME = 'microgit'
 DESC = 'Git for Micro'
+local git
 local go = assert(loadstring([[  -- script: lua
   return ({
     import = function (pkg)
@@ -41,6 +42,22 @@ if not (LOADED_LINEFNS) then
     __order = { }
   }
 end
+local bound
+bound = function(n, min, max)
+  return n > max and max or (n < min and min or n)
+end
+local debug
+debug = function(m)
+  return app.Log(tostring(NAME) .. ": " .. tostring(m))
+end
+local truthy
+truthy = function(v)
+  if v then
+    return true
+  else
+    return false
+  end
+end
 local errors = {
   is_a_repo = "the current directory is already a repository",
   not_a_repo = "the current directory is not a repository",
@@ -51,15 +68,6 @@ local errors = {
   command_not_found = "invalid command provided (not a command)",
   no_help = "FIXME: no help for command git."
 }
-local git
-local bound
-bound = function(n, min, max)
-  return n > max and max or (n < min and min or n)
-end
-local debug
-debug = function(m)
-  return app.Log(tostring(NAME) .. ": " .. tostring(m))
-end
 local chomp
 chomp = function(s)
   s = s:gsub("^%s*", ""):gsub("%s*$", ""):gsub("[\n\r]*$", "")
@@ -71,17 +79,23 @@ each_line = function(input, fn)
   input = str.Replace(input, "\n\r", "\n", -1)
   local lines = str.Split(input, "\n")
   local l_count = #lines
+  local finish_ret, finish_err
   local stop = false
   local finish
-  finish = function()
+  finish = function(v, err)
     stop = true
+    finish_ret = v
+    if err then
+      finish_err = err
+    end
   end
   for i = 1, l_count do
     if stop then
-      return 
+      break
     end
     fn(lines[i], i, l_count, finish)
   end
+  return finish_ret, finish_err
 end
 local add_command
 add_command = function(name, fn, cb)
@@ -140,10 +154,12 @@ add_statusinfo = function(name, fn, description)
 end
 local generate_help = (function()
   local get_parser
-  get_parser = function(on_line_complete)
-    local on_line = 1
-    local margin = ''
-    local parsed = ''
+  get_parser = function()
+    local on_line, margin, parsed = 1, '', ''
+    local _get_result
+    _get_result = function()
+      return parsed
+    end
     local _parse_line
     _parse_line = function(line, _, total)
       if on_line == 1 and line:match("^%s*$") then
@@ -158,10 +174,6 @@ local generate_help = (function()
       end
       parsed = parsed .. "\n>  " .. tostring(line)
       on_line = on_line + 1
-    end
-    local _get_result
-    _get_result = function()
-      return parsed
     end
     return _parse_line, _get_result
   end
@@ -256,11 +268,14 @@ end
 local make_temp = (function()
   local rand = go.import("math/rand")
   local chars = 'qwertyuioasdfghjklzxcvbnm'
-  return function()
+  return function(header)
+    if header == nil then
+      header = 'XXX'
+    end
     local dir = path.Join(tostring(cfg.ConfigDir), "tmp")
     local err = os.MkdirAll(dir, 0x1F8)
     assert(not err, err)
-    local file = (tostring(NAME) .. ".commit.") .. ("XXXXXXXXXXXX"):gsub('[xX]', function(self)
+    local file = (tostring(NAME) .. "." .. tostring(header) .. ".") .. ("XXXXXXXXXXXX"):gsub('[xX]', function(self)
       local i = rand.Intn(25) + 1
       local c = chars:sub(i, i)
       local _exp_0 = self
@@ -319,7 +334,7 @@ local make_commit_pane
 make_commit_pane = function(root, output, header, fn)
   local old_view = root:GetView()
   local h = old_view.Height
-  local filepath = make_temp()
+  local filepath = make_temp('commit')
   debug("Populating temporary commit file " .. tostring(filepath) .. " ...")
   ioutil.WriteFile(filepath, output, 0x1B0)
   debug("Generating new buffer for " .. tostring(filepath))
@@ -601,6 +616,24 @@ git = (function()
     end,
     init_help = [[      Usage: %pub%.init
         Initialize a repository in the current panes directory
+    ]],
+    diff = function(self)
+      local cmd, err = new_command(self.Buf.Path)
+      if not (cmd) then
+        return send.diff(err)
+      end
+      if not (cmd.in_repo()) then
+        return send.diff(errors.not_a_repo)
+      end
+      local out
+      out, err = cmd.exec("diff", self.Buf.Path)
+      if err then
+        return send.diff(err)
+      end
+      return send.diff(out)
+    end,
+    diff_help = [[      Usage: %pub%.diff
+        Git diff HEAD for the current file
     ]],
     fetch = function(self)
       local cmd, err = new_command(self.Buf.Path)
@@ -1065,7 +1098,7 @@ preinit = function()
   add_statusinfo("oncommit", oncommit, [[    The latest commit short hash
   ]])
   debug("Clearing stale commit files ...")
-  local pfx = tostring(NAME) .. ".commit."
+  local pfx = tostring(NAME) .. "."
   local dir = path.Join(tostring(cfg.ConfigDir), "tmp")
   local files, err = ioutil.ReadDir(dir)
   if not (err) then
@@ -1102,6 +1135,7 @@ init = function()
   add_command("stage", git.stage, cfg.FileComplete)
   add_command("unstage", git.unstage, cfg.FileComplete)
   add_command("rm", git.rm, cfg.FileComplete)
+  add_command("diff", git.diff, cfg.FileComplete)
   return generate_help()
 end
 onBufPaneOpen = function(self)
