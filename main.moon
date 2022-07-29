@@ -93,8 +93,10 @@ add_command = (name, fn, cb) ->
 
     if any and any.Buf then
       git.update_branch_status any.Buf
+      git.update_git_diff_base any.Buf
     elseif any.Path
       git.update_branch_status any
+      git.update_git_diff_base any
     
     return
 
@@ -242,6 +244,7 @@ send_block = (->
     send_pane.Buf\SetOptionNative "statusformatr", ""
     send_pane.Buf\SetOptionNative "statusformatl", header
     send_pane.Buf\SetOptionNative "scrollbar", false
+    send_pane.Buf\SetOptionNative "diffgutter", false
     send_pane.Cursor.Loc.Y = 0
     send_pane.Cursor.Loc.X = 0
     send_pane.Cursor\Relocate!
@@ -263,6 +266,7 @@ make_empty_pane = (root, rszfn, header) ->
   pane.Buf\SetOptionNative "statusformatr", ""
   pane.Buf\SetOptionNative "statusformatl", header
   pane.Buf\SetOptionNative "scrollbar", false
+  pane.Buf\SetOptionNative "diffgutter", false
   pane.Cursor.Loc.Y = 0
   pane.Cursor.Loc.X = 0
   return pane
@@ -300,6 +304,7 @@ make_commit_pane = (root, output, header, fn) ->
   commit_pane.Buf\SetOptionNative "statusformatr", ""
   commit_pane.Buf\SetOptionNative "statusformatl", header
   commit_pane.Buf\SetOptionNative "scrollbar", false
+  commit_pane.Buf\SetOptionNative "diffgutter", false
   commit_pane.Cursor.Loc.Y = 0
   commit_pane.Cursor.Loc.X = 0
   commit_pane.Cursor\Relocate!
@@ -542,8 +547,32 @@ git = (->
 
     debug "update_branch_status: Done"
 
+
+  suppress = " (to suppress this message, set git.gitgutter to false)"
+  update_git_diff_base = (cmd) =>
+    unless @Path
+      debug "update_git_diff_base: was called with a non-buffer object!"
+      return
+    
+    return unless cfg.GetGlobalOption "#{NAME}.gitgutter"
+    return unless (not @Type.Scratch) and (@Path != '')
+    
+    debug "update_git_diff_base: Beginning update process for #{self}"
+
+    unless cmd
+      cmd, err = new_command @Path
+      return send.diffupdate "#{err}#{suppress}" unless cmd  
+
+    return unless cmd.in_repo!
+    base, err = cmd.exec "show", ":./"..@Path
+    base = @Bytes! if err != nil
+    @SetDiffBase base
+    debug "update_git_diff_base: updated diff base"
+    
+
   return {
     :update_branch_status
+    :update_git_diff_base
       
     init: =>
       cmd, err = new_command @Buf.Path
@@ -975,6 +1004,12 @@ export preinit = ->
     Note: Required for statusline
   ]]
 
+  add_config "gitgutter", true, [[
+    Enable or disable updating the diff gutter with git changes (type: boolean)
+
+    Note: To use this, ensure diffgutter is enabled
+  ]]
+
   add_statusinfo "numahead", numahead, [[
     The number of commits ahead of your branches origin (type: number)
   ]]
@@ -1038,12 +1073,14 @@ export init = ->
 export onBufPaneOpen = =>
   debug "Caught onBufPaneOpen bufpane:#{self}"
   git.update_branch_status @Buf
+  git.update_git_diff_base @Buf
 
 --- Update branch tracking for the buffer, and if its a commit pane mark it as
 -- ready to commit
 export onSave = =>
   debug "Caught onSave bufpane:#{self}"
   git.update_branch_status @Buf
+  git.update_git_diff_base @Buf
   return unless #ACTIVE_COMMITS > 0
 
   for i, commit in ipairs ACTIVE_COMMITS

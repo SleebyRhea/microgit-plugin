@@ -123,8 +123,10 @@ add_command = function(name, fn, cb)
     debug("command[" .. tostring(external_name) .. "] completed")
     if any and any.Buf then
       git.update_branch_status(any.Buf)
+      git.update_git_diff_base(any.Buf)
     elseif any.Path then
       git.update_branch_status(any)
+      git.update_git_diff_base(any)
     end
   end
   cfg.MakeCommand(external_name, cmd, cb)
@@ -306,6 +308,7 @@ local send_block = (function()
     send_pane.Buf:SetOptionNative("statusformatr", "")
     send_pane.Buf:SetOptionNative("statusformatl", header)
     send_pane.Buf:SetOptionNative("scrollbar", false)
+    send_pane.Buf:SetOptionNative("diffgutter", false)
     send_pane.Cursor.Loc.Y = 0
     send_pane.Cursor.Loc.X = 0
     return send_pane.Cursor:Relocate()
@@ -326,6 +329,7 @@ make_empty_pane = function(root, rszfn, header)
   pane.Buf:SetOptionNative("statusformatr", "")
   pane.Buf:SetOptionNative("statusformatl", header)
   pane.Buf:SetOptionNative("scrollbar", false)
+  pane.Buf:SetOptionNative("diffgutter", false)
   pane.Cursor.Loc.Y = 0
   pane.Cursor.Loc.X = 0
   return pane
@@ -349,6 +353,7 @@ make_commit_pane = function(root, output, header, fn)
   commit_pane.Buf:SetOptionNative("statusformatr", "")
   commit_pane.Buf:SetOptionNative("statusformatl", header)
   commit_pane.Buf:SetOptionNative("scrollbar", false)
+  commit_pane.Buf:SetOptionNative("diffgutter", false)
   commit_pane.Cursor.Loc.Y = 0
   commit_pane.Cursor.Loc.X = 0
   commit_pane.Cursor:Relocate()
@@ -597,8 +602,40 @@ git = (function()
     end
     return debug("update_branch_status: Done")
   end
+  local suppress = " (to suppress this message, set git.gitgutter to false)"
+  local update_git_diff_base
+  update_git_diff_base = function(self, cmd)
+    if not (self.Path) then
+      debug("update_git_diff_base: was called with a non-buffer object!")
+      return 
+    end
+    if not (cfg.GetGlobalOption(tostring(NAME) .. ".gitgutter")) then
+      return 
+    end
+    if not ((not self.Type.Scratch) and (self.Path ~= '')) then
+      return 
+    end
+    debug("update_git_diff_base: Beginning update process for " .. tostring(self))
+    if not (cmd) then
+      local err
+      cmd, err = new_command(self.Path)
+      if not (cmd) then
+        return send.diffupdate(tostring(err) .. tostring(suppress))
+      end
+    end
+    if not (cmd.in_repo()) then
+      return 
+    end
+    local base, err = cmd.exec("show", ":./" .. self.Path)
+    if err ~= nil then
+      base = self:Bytes()
+    end
+    self:SetDiffBase(base)
+    return debug("update_git_diff_base: updated diff base")
+  end
   return {
     update_branch_status = update_branch_status,
+    update_git_diff_base = update_git_diff_base,
     init = function(self)
       local cmd, err = new_command(self.Buf.Path)
       if not (cmd) then
@@ -1087,6 +1124,10 @@ preinit = function()
 
     Note: Required for statusline
   ]])
+  add_config("gitgutter", true, [[    Enable or disable updating the diff gutter with git changes (type: boolean)
+
+    Note: To use this, ensure diffgutter is enabled
+  ]])
   add_statusinfo("numahead", numahead, [[    The number of commits ahead of your branches origin (type: number)
   ]])
   add_statusinfo("numbehind", numbehind, [[    The number of commits behind of origin your branches tree is (type: number)
@@ -1140,11 +1181,13 @@ init = function()
 end
 onBufPaneOpen = function(self)
   debug("Caught onBufPaneOpen bufpane:" .. tostring(self))
-  return git.update_branch_status(self.Buf)
+  git.update_branch_status(self.Buf)
+  return git.update_git_diff_base(self.Buf)
 end
 onSave = function(self)
   debug("Caught onSave bufpane:" .. tostring(self))
   git.update_branch_status(self.Buf)
+  git.update_git_diff_base(self.Buf)
   if not (#ACTIVE_COMMITS > 0) then
     return 
   end
