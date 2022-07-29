@@ -680,12 +680,11 @@ git = (function()
       if not (cmd.in_repo()) then
         return send.fetch(errors.not_a_repo)
       end
-      local out
-      out, err = cmd.exec("fetch")
+      local _
+      _, err = cmd.exec_async(self, "fetch")
       if err then
         return send.fetch(err)
       end
-      return send.fetch(out)
     end,
     fetch_help = [[      Usage: %pub%.fetch
         Fetch latest changes from remotes
@@ -776,10 +775,6 @@ git = (function()
         if not (re_valid_label:Match(label)) then
           return send.branch(errors.invalid_lbl)
         end
-        local out = ''
-        local fetch_out, _ = cmd.exec("fetch")
-        out = out .. "> git fetch\n"
-        out = out .. tostring(fetch_out)
         do
           local rev = cmd.known_label(label)
           if rev then
@@ -788,11 +783,10 @@ git = (function()
         end
         local branch_out
         branch_out, err = cmd.exec("branch", label)
-        out = out .. "> git branch " .. tostring(label) .. "\n"
+        local out = "> git branch " .. tostring(label) .. "\n"
         out = out .. branch_out
         if not (err) then
-          local chkout_out
-          chkout_out, _ = cmd.exec("checkout", label)
+          local chkout_out, _ = cmd.exec("checkout", label)
           out = out .. "> git checkout " .. tostring(label) .. "\n"
           out = out .. chkout_out
         end
@@ -902,12 +896,11 @@ git = (function()
       if not (cmd.in_repo()) then
         return send.pull(errors.not_a_repo)
       end
-      local pull_out
-      pull_out, err = cmd.exec("pull")
+      local _
+      _, err = cmd.exec_async(self, "pull")
       if err then
         return send.pull(err)
       end
-      return send.pull(pull_out)
     end,
     pull_help = [[      Usage: %pub%.pull
         Pull all changes from remote into the working tree

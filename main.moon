@@ -613,9 +613,9 @@ git = (->
         return send.fetch err
       unless cmd.in_repo!
         return send.fetch errors.not_a_repo
-      out, err = cmd.exec "fetch"
+      _, err = cmd.exec_async self, "fetch"
       return send.fetch err if err
-      send.fetch out
+      return
 
     fetch_help: [[
       Usage: %pub%.fetch
@@ -710,19 +710,12 @@ git = (->
         unless re_valid_label\Match label
           return send.branch errors.invalid_lbl
 
-        -- Intentionally ignoring any errors here, in case this is a local
-        -- only repository
-        out = ''
-        fetch_out, _ = cmd.exec "fetch"
-        out ..= "> git fetch\n"
-        out ..= "#{fetch_out}"
-
         if rev = cmd.known_label label
           return send.branch errors.invalid_arg ..
             ", please supply an unused label (#{label} is rev:#{rev})"
 
         branch_out, err = cmd.exec "branch", label
-        out ..= "> git branch #{label}\n"
+        out = "> git branch #{label}\n"
         out ..= branch_out
 
         unless err
@@ -837,9 +830,9 @@ git = (->
       unless cmd.in_repo!
         return send.pull errors.not_a_repo
       
-      pull_out, err = cmd.exec "pull"
+      _, err = cmd.exec_async self, "pull"
       return send.pull err if err
-      send.pull pull_out
+      return
 
     pull_help: [[
       Usage: %pub%.pull
