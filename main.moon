@@ -495,7 +495,7 @@ git = (->
       debug "update_branch_status: was called with a non-buffer object!"
       return
     
-    return unless cfg.GetGlobalOption "#{NAME}.updateinfo"
+    return unless truthy cfg.GetGlobalOption "#{NAME}.updateinfo"
     return unless (not @Type.Scratch) and (@Path != '')
     
     debug "update_branch_status: Beginning update process for #{self}"
@@ -554,7 +554,7 @@ git = (->
       debug "update_git_diff_base: was called with a non-buffer object!"
       return
     
-    return unless cfg.GetGlobalOption "#{NAME}.gitgutter"
+    return unless truthy cfg.GetGlobalOption "#{NAME}.gitgutter"
     return unless (not @Type.Scratch) and (@Path != '')
     
     debug "update_git_diff_base: Beginning update process for #{self}"
@@ -992,7 +992,6 @@ export oncommit = =>
 export onbranch = =>
   return tostring(BUFFER_BRANCH[@Path] or "")
 
-
 export preinit = ->
   add_config "command", "", [[
     The absolute path to the command to use for git operations (type: string) 
@@ -1008,6 +1007,10 @@ export preinit = ->
     Enable or disable updating the diff gutter with git changes (type: boolean)
 
     Note: To use this, ensure diffgutter is enabled
+  ]]
+
+  add_config "cleanstale", true, [[
+    Enable or disable whether this plugin deletes it's old tempfiles on startup (type: boolean)
   ]]
 
   add_statusinfo "numahead", numahead, [[
@@ -1030,18 +1033,19 @@ export preinit = ->
     The latest commit short hash
   ]]
 
-  debug "Clearing stale commit files ..."
-  pfx = "#{NAME}."
-  dir = path.Join "#{cfg.ConfigDir}", "tmp"
+  if truthy cfg.GetGlobalOption "#{NAME}.cleanstale"
+    debug "Clearing stale temporary files ..."
+    pfx = "#{NAME}."
+    dir = path.Join "#{cfg.ConfigDir}", "tmp"
 
-  files, err = ioutil.ReadDir dir
-  unless err
-    for f in *files
-      debug "Does #{f\Name!} have the prefix #{pfx}?"
-      if str.HasPrefix f\Name!, pfx
-        filepath = path.Join dir, f\Name!
-        debug "Clearing #{filepath}"
-        os.Remove filepath
+    files, err = ioutil.ReadDir dir
+    unless err
+      for f in *files
+        debug "Does #{f\Name!} have the prefix #{pfx}?"
+        if str.HasPrefix f\Name!, pfx
+          filepath = path.Join dir, f\Name!
+          debug "Clearing #{filepath}"
+          os.Remove filepath
 
 export init = ->
   debug "Initializing #{NAME}"

@@ -544,7 +544,7 @@ git = (function()
       debug("update_branch_status: was called with a non-buffer object!")
       return 
     end
-    if not (cfg.GetGlobalOption(tostring(NAME) .. ".updateinfo")) then
+    if not (truthy(cfg.GetGlobalOption(tostring(NAME) .. ".updateinfo"))) then
       return 
     end
     if not ((not self.Type.Scratch) and (self.Path ~= '')) then
@@ -609,7 +609,7 @@ git = (function()
       debug("update_git_diff_base: was called with a non-buffer object!")
       return 
     end
-    if not (cfg.GetGlobalOption(tostring(NAME) .. ".gitgutter")) then
+    if not (truthy(cfg.GetGlobalOption(tostring(NAME) .. ".gitgutter"))) then
       return 
     end
     if not ((not self.Type.Scratch) and (self.Path ~= '')) then
@@ -1128,6 +1128,8 @@ preinit = function()
 
     Note: To use this, ensure diffgutter is enabled
   ]])
+  add_config("cleanstale", true, [[    Enable or disable whether this plugin deletes it's old tempfiles on startup (type: boolean)
+  ]])
   add_statusinfo("numahead", numahead, [[    The number of commits ahead of your branches origin (type: number)
   ]])
   add_statusinfo("numbehind", numbehind, [[    The number of commits behind of origin your branches tree is (type: number)
@@ -1138,18 +1140,20 @@ preinit = function()
   ]])
   add_statusinfo("oncommit", oncommit, [[    The latest commit short hash
   ]])
-  debug("Clearing stale commit files ...")
-  local pfx = tostring(NAME) .. "."
-  local dir = path.Join(tostring(cfg.ConfigDir), "tmp")
-  local files, err = ioutil.ReadDir(dir)
-  if not (err) then
-    for _index_0 = 1, #files do
-      local f = files[_index_0]
-      debug("Does " .. tostring(f:Name()) .. " have the prefix " .. tostring(pfx) .. "?")
-      if str.HasPrefix(f:Name(), pfx) then
-        local filepath = path.Join(dir, f:Name())
-        debug("Clearing " .. tostring(filepath))
-        os.Remove(filepath)
+  if truthy(cfg.GetGlobalOption(tostring(NAME) .. ".cleanstale")) then
+    debug("Clearing stale temporary files ...")
+    local pfx = tostring(NAME) .. "."
+    local dir = path.Join(tostring(cfg.ConfigDir), "tmp")
+    local files, err = ioutil.ReadDir(dir)
+    if not (err) then
+      for _index_0 = 1, #files do
+        local f = files[_index_0]
+        debug("Does " .. tostring(f:Name()) .. " have the prefix " .. tostring(pfx) .. "?")
+        if str.HasPrefix(f:Name(), pfx) then
+          local filepath = path.Join(dir, f:Name())
+          debug("Clearing " .. tostring(filepath))
+          os.Remove(filepath)
+        end
       end
     end
   end
