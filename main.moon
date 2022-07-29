@@ -502,7 +502,7 @@ git = (->
 
     unless cmd
       cmd, err = new_command @Path
-      return send.updater (err .. " (to suppress this message, set git.statusline to false)") unless cmd    
+      return send.updater (err .. " (to suppress this message, set #{NAME}.updateinfo to false)") unless cmd    
 
     local branch
 
@@ -548,7 +548,7 @@ git = (->
     debug "update_branch_status: Done"
 
 
-  suppress = " (to suppress this message, set git.gitgutter to false)"
+  suppress = " (to suppress this message, set #{NAME}.gitgutter to false)"
   update_git_diff_base = (cmd) =>
     unless @Path
       debug "update_git_diff_base: was called with a non-buffer object!"

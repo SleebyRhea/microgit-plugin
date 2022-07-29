@@ -555,7 +555,7 @@ git = (function()
       local err
       cmd, err = new_command(self.Path)
       if not (cmd) then
-        return send.updater((err .. " (to suppress this message, set git.statusline to false)"))
+        return send.updater((err .. " (to suppress this message, set " .. tostring(NAME) .. ".updateinfo to false)"))
       end
     end
     local branch
@@ -602,7 +602,7 @@ git = (function()
     end
     return debug("update_branch_status: Done")
   end
-  local suppress = " (to suppress this message, set git.gitgutter to false)"
+  local suppress = " (to suppress this message, set " .. tostring(NAME) .. ".gitgutter to false)"
   local update_git_diff_base
   update_git_diff_base = function(self, cmd)
     if not (self.Path) then
