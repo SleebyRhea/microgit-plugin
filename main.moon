@@ -270,45 +270,22 @@ make_temp = (->
 )!
 
 
---- Create a new readonly scratch pane with the contents of output
+--- Create a new readonly scratch hsplit pane and return it
 --
--- Inspired heavily by filemanager
+-- Initially inspired by filemanager
 -- https://github.com/micro-editor/updated-plugins/blob/master/filemanager-plugin/filemanager.lua
-send_block = (->
-  re_special_chars = regexp.MustCompile"\\x1B\\[([0-9]{1,3}(;[0-9]{1,3})*)?[mGK]"
+make_empty_hsplit = (root, rszfn, header, output, filepath) ->
+  if not output and not filepath
+    output = ""
 
-  return (header, output) ->
-    old_view = (app.CurPane!)\GetView!
-    h = old_view.Height
-
-    output = re_special_chars\ReplaceAllString output, ""
-
-    -- Creates a new split, set's it's height to a fifth of the current pane height
-    -- makes it readonly, unsaveable, and then dumps the output string into its
-    -- buffer. Follow this by setting the cursor to 0,0 to move to the top
-    send_pane = (app.CurPane!)\HSplitIndex(buf.NewBuffer(output, header), true)
-    send_pane\ResizePane h - (h / 5)
-    send_pane.Buf.Type.Scratch = true
-    send_pane.Buf.Type.Readonly = true
-    send_pane.Buf.Type.Syntax = false
-    send_pane.Buf\SetOptionNative "softwrap", true
-    send_pane.Buf\SetOptionNative "ruler", false
-    send_pane.Buf\SetOptionNative "autosave", false
-    send_pane.Buf\SetOptionNative "statusformatr", ""
-    send_pane.Buf\SetOptionNative "statusformatl", header
-    send_pane.Buf\SetOptionNative "scrollbar", false
-    send_pane.Buf\SetOptionNative "diffgutter", false
-    send_pane.Cursor.Loc.Y = 0
-    send_pane.Cursor.Loc.X = 0
-    send_pane.Cursor\Relocate!
-)!
-
-
---- Create a new readonly scratch pane and return it
-make_empty_pane = (root, rszfn, header) ->
+  local pane
   old_view = root\GetView!
   h = old_view.Height
-  pane = root\HSplitIndex(buf.NewBuffer("", header), true)
+  if filepath
+    pane = root\HSplitIndex(buf.NewBufferFromFile(filepath), true)
+  else
+    pane = root\HSplitIndex(buf.NewBuffer(output, ""), true)
+    
   pane\ResizePane rszfn h
   pane.Buf.Type.Scratch = true
   pane.Buf.Type.Readonly = true
@@ -322,7 +299,39 @@ make_empty_pane = (root, rszfn, header) ->
   pane.Buf\SetOptionNative "diffgutter", false
   pane.Cursor.Loc.Y = 0
   pane.Cursor.Loc.X = 0
+  pane.Cursor\Relocate!
   return pane
+
+--- Create a new readonly scratch vsplit pane and return it
+make_empty_vsplit = (root, rszfn, header, output, filepath) ->
+  local pane
+  old_view = root\GetView!
+  h = old_view.Height
+  if filepath
+    pane = root\VSplitIndex(buf.NewBufferFromFile(filepath, true), true)
+  else
+    pane = root\VSplitIndex(buf.NewBuffer(output, ""), true)
+  pane\ResizePane rszfn h
+  pane.Buf.Type.Scratch = true
+  pane.Buf.Type.Readonly = true
+  pane.Buf.Type.Syntax = false
+  pane.Buf\SetOptionNative "softwrap", true
+  pane.Buf\SetOptionNative "ruler", false
+  pane.Buf\SetOptionNative "autosave", false
+  pane.Buf\SetOptionNative "statusformatr", ""
+  pane.Buf\SetOptionNative "statusformatl", header
+  pane.Buf\SetOptionNative "scrollbar", false
+  pane.Buf\SetOptionNative "diffgutter", false
+  pane.Cursor.Loc.Y = 0
+  pane.Cursor.Loc.X = 0
+  pane.Cursor\Relocate!
+  return pane
+
+  
+--- Create a new readonly scratch pane with the contents of output
+send_block = (header, output, syntax=false) ->
+  pane = make_empty_hsplit app.CurPane!, ((h) -> h - (h / 5)), header, output
+  pane.Buf.Type.Syntax = truthy syntax
 
 
 --- Create a new pane with the contents of output. Add that
@@ -332,40 +341,20 @@ make_empty_pane = (root, rszfn, header) ->
 -- The provided callback function should have the signature with string being
 -- a filepath.
 --   (string) ->
-make_commit_pane = (root, output, header, fn) ->
-  old_view = root\GetView!
-  h = old_view.Height
-
+make_commit_pane = (root, output, fn) ->
   filepath = make_temp 'commit'
-
-  debug "Populating temporary commit file #{filepath} ..."
   ioutil.WriteFile filepath, output, 0x1B0 -- 0660, to account for octal
-
-  -- Creates a new split, sets it's height to a third of the current pane height
-  -- makes and then dumps the output string into its buffer
-  -- Follow this by setting the cursor to 0,0 to move to the top
-  debug "Generating new buffer for #{filepath}"
-  commit_pane = (app.CurPane!)\HSplitIndex(buf.NewBuffer(output, filepath), true)
-  commit_pane\ResizePane h - (h / 3)
-  commit_pane.Buf.Type.Scratch = false
-  commit_pane.Buf.Type.Readonly = false
-  commit_pane.Buf.Type.Syntax = false
-  commit_pane.Buf\SetOptionNative "softwrap", true
-  commit_pane.Buf\SetOptionNative "ruler", false
-  commit_pane.Buf\SetOptionNative "autosave", false
-  commit_pane.Buf\SetOptionNative "statusformatr", ""
-  commit_pane.Buf\SetOptionNative "statusformatl", header
-  commit_pane.Buf\SetOptionNative "scrollbar", false
-  commit_pane.Buf\SetOptionNative "diffgutter", false
-  commit_pane.Cursor.Loc.Y = 0
-  commit_pane.Cursor.Loc.X = 0
-  commit_pane.Cursor\Relocate!
+  
+  header = "[new commit: save and quit to finalize]"
+  pane = make_empty_hsplit root, ((h) -> h - (h / 3)), header, output, filepath
+  pane.Buf.Type.Scratch = false
+  pane.Buf.Type.Readonly = false
 
   table.insert ACTIVE_COMMITS, {
     callback: fn
-    pane: commit_pane
     file: filepath
     done: false
+    pane: pane
     root: root
   }
 
@@ -444,7 +433,7 @@ git = (->
         return nil, err.Error!
 
       resize_fn = (h) -> h - ( h / 3 )
-      pane = make_empty_pane self, resize_fn, "git-#{cmd}"
+      pane = make_empty_hsplit self, resize_fn, "git-#{cmd}"
 
       on_emit = (_str, _) ->
         pane.Buf\Write _str
@@ -818,6 +807,7 @@ git = (->
         table.insert diff_args, repo_relative_file
 
       out, err = cmd.exec "diff", unpack diff_args
+      out = "no changes to diff" if chomp(out) == ''
       return send.diff err if err
       send.diff out
 
@@ -984,10 +974,8 @@ git = (->
         status_out, _ = cmd.exec "status"
         each_line chomp(status_out), (line) ->
           commit_msg_start ..= "# #{line}\n"
-          
-        header = "[new commit: save and quit to finalize]"
         
-        make_commit_pane self, commit_msg_start, header, (file, _) ->
+        make_commit_pane self, commit_msg_start, (file, _) ->
           commit_msg = ioutil.ReadFile file
           commit_msg = str.TrimSuffix commit_msg, commit_msg_start
           

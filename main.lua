@@ -343,34 +343,19 @@ local make_temp = (function()
     return tostring(path.Join(dir, file))
   end
 end)()
-local send_block = (function()
-  local re_special_chars = regexp.MustCompile("\\x1B\\[([0-9]{1,3}(;[0-9]{1,3})*)?[mGK]")
-  return function(header, output)
-    local old_view = (app.CurPane()):GetView()
-    local h = old_view.Height
-    output = re_special_chars:ReplaceAllString(output, "")
-    local send_pane = (app.CurPane()):HSplitIndex(buf.NewBuffer(output, header), true)
-    send_pane:ResizePane(h - (h / 5))
-    send_pane.Buf.Type.Scratch = true
-    send_pane.Buf.Type.Readonly = true
-    send_pane.Buf.Type.Syntax = false
-    send_pane.Buf:SetOptionNative("softwrap", true)
-    send_pane.Buf:SetOptionNative("ruler", false)
-    send_pane.Buf:SetOptionNative("autosave", false)
-    send_pane.Buf:SetOptionNative("statusformatr", "")
-    send_pane.Buf:SetOptionNative("statusformatl", header)
-    send_pane.Buf:SetOptionNative("scrollbar", false)
-    send_pane.Buf:SetOptionNative("diffgutter", false)
-    send_pane.Cursor.Loc.Y = 0
-    send_pane.Cursor.Loc.X = 0
-    return send_pane.Cursor:Relocate()
+local make_empty_hsplit
+make_empty_hsplit = function(root, rszfn, header, output, filepath)
+  if not output and not filepath then
+    output = ""
   end
-end)()
-local make_empty_pane
-make_empty_pane = function(root, rszfn, header)
+  local pane
   local old_view = root:GetView()
   local h = old_view.Height
-  local pane = root:HSplitIndex(buf.NewBuffer("", header), true)
+  if filepath then
+    pane = root:HSplitIndex(buf.NewBufferFromFile(filepath), true)
+  else
+    pane = root:HSplitIndex(buf.NewBuffer(output, ""), true)
+  end
   pane:ResizePane(rszfn(h))
   pane.Buf.Type.Scratch = true
   pane.Buf.Type.Readonly = true
@@ -384,36 +369,60 @@ make_empty_pane = function(root, rszfn, header)
   pane.Buf:SetOptionNative("diffgutter", false)
   pane.Cursor.Loc.Y = 0
   pane.Cursor.Loc.X = 0
+  pane.Cursor:Relocate()
   return pane
 end
-local make_commit_pane
-make_commit_pane = function(root, output, header, fn)
+local make_empty_vsplit
+make_empty_vsplit = function(root, rszfn, header, output, filepath)
+  local pane
   local old_view = root:GetView()
   local h = old_view.Height
+  if filepath then
+    pane = root:VSplitIndex(buf.NewBufferFromFile(filepath, true), true)
+  else
+    pane = root:VSplitIndex(buf.NewBuffer(output, ""), true)
+  end
+  pane:ResizePane(rszfn(h))
+  pane.Buf.Type.Scratch = true
+  pane.Buf.Type.Readonly = true
+  pane.Buf.Type.Syntax = false
+  pane.Buf:SetOptionNative("softwrap", true)
+  pane.Buf:SetOptionNative("ruler", false)
+  pane.Buf:SetOptionNative("autosave", false)
+  pane.Buf:SetOptionNative("statusformatr", "")
+  pane.Buf:SetOptionNative("statusformatl", header)
+  pane.Buf:SetOptionNative("scrollbar", false)
+  pane.Buf:SetOptionNative("diffgutter", false)
+  pane.Cursor.Loc.Y = 0
+  pane.Cursor.Loc.X = 0
+  pane.Cursor:Relocate()
+  return pane
+end
+local send_block
+send_block = function(header, output, syntax)
+  if syntax == nil then
+    syntax = false
+  end
+  local pane = make_empty_hsplit(app.CurPane(), (function(h)
+    return h - (h / 5)
+  end), header, output)
+  pane.Buf.Type.Syntax = truthy(syntax)
+end
+local make_commit_pane
+make_commit_pane = function(root, output, fn)
   local filepath = make_temp('commit')
-  debug("Populating temporary commit file " .. tostring(filepath) .. " ...")
   ioutil.WriteFile(filepath, output, 0x1B0)
-  debug("Generating new buffer for " .. tostring(filepath))
-  local commit_pane = (app.CurPane()):HSplitIndex(buf.NewBuffer(output, filepath), true)
-  commit_pane:ResizePane(h - (h / 3))
-  commit_pane.Buf.Type.Scratch = false
-  commit_pane.Buf.Type.Readonly = false
-  commit_pane.Buf.Type.Syntax = false
-  commit_pane.Buf:SetOptionNative("softwrap", true)
-  commit_pane.Buf:SetOptionNative("ruler", false)
-  commit_pane.Buf:SetOptionNative("autosave", false)
-  commit_pane.Buf:SetOptionNative("statusformatr", "")
-  commit_pane.Buf:SetOptionNative("statusformatl", header)
-  commit_pane.Buf:SetOptionNative("scrollbar", false)
-  commit_pane.Buf:SetOptionNative("diffgutter", false)
-  commit_pane.Cursor.Loc.Y = 0
-  commit_pane.Cursor.Loc.X = 0
-  commit_pane.Cursor:Relocate()
+  local header = "[new commit: save and quit to finalize]"
+  local pane = make_empty_hsplit(root, (function(h)
+    return h - (h / 3)
+  end), header, output, filepath)
+  pane.Buf.Type.Scratch = false
+  pane.Buf.Type.Readonly = false
   return table.insert(ACTIVE_COMMITS, {
     callback = fn,
-    pane = commit_pane,
     file = filepath,
     done = false,
+    pane = pane,
     root = root
   })
 end
@@ -497,7 +506,7 @@ git = (function()
       resize_fn = function(h)
         return h - (h / 3)
       end
-      local pane = make_empty_pane(self, resize_fn, "git-" .. tostring(cmd))
+      local pane = make_empty_hsplit(self, resize_fn, "git-" .. tostring(cmd))
       local on_emit
       on_emit = function(_str, _)
         pane.Buf:Write(_str)
@@ -925,6 +934,9 @@ git = (function()
       end
       local out
       out, err = cmd.exec("diff", unpack(diff_args))
+      if chomp(out) == '' then
+        out = "no changes to diff"
+      end
       if err then
         return send.diff(err)
       end
@@ -1106,8 +1118,7 @@ git = (function()
         each_line(chomp(status_out), function(line)
           commit_msg_start = commit_msg_start .. "# " .. tostring(line) .. "\n"
         end)
-        local header = "[new commit: save and quit to finalize]"
-        make_commit_pane(self, commit_msg_start, header, function(file, _)
+        make_commit_pane(self, commit_msg_start, function(file, _)
           local commit_msg = ioutil.ReadFile(file)
           commit_msg = str.TrimSuffix(commit_msg, commit_msg_start)
           if commit_msg == "" then
