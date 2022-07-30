@@ -21,6 +21,7 @@ local fpath = go.import("path/file")
 local ioutil = go.import("ioutil")
 local regexp = go.import("regexp")
 local runtime = go.import("runtime")
+local GITLINE_ACTIVE = false
 local ACTIVE_UPDATES = { }
 local ACTIVE_COMMITS = { }
 local CALLBACKS_SET = { }
@@ -69,7 +70,8 @@ local errors = {
   unknown_label = "given label is not known to this repo",
   command_not_found = "invalid command provided (not a command)",
   no_help = "FIXME: no help for command git.",
-  no_scratch = "this cannot be run out of a temporary pane"
+  no_scratch = "this cannot be run out of a temporary pane",
+  need_file = "this can only be run in a file pane"
 }
 local chomp
 chomp = function(s)
@@ -120,26 +122,84 @@ each_line = function(input, fn)
 end
 local get_path_info = (function()
   local s = string.char(os.PathSeparator)
-  local re_abs = regexp.MustCompile("^" .. tostring(runtime.GOOS == 'windows' and '[a-zA-Z]:' or '') .. tostring(s) .. tostring(s) .. "?.+" .. tostring(s) .. tostring(s) .. "?.*")
-  local re_part = regexp.MustCompile(tostring(s) .. tostring(s) .. "?")
-  local re_root = regexp.MustCompile("^" .. tostring(runtime.GOOS == 'windows' and '[a-zA-Z]:' or '') .. tostring(s) .. tostring(s) .. "?$")
-  return function(_string)
+  local insert = table.insert
+  local windows = (runtime.GOOS == "windows" and true or false)
+  local re_part = regexp.MustCompile("[^" .. tostring(s) .. "]+")
+  local re_root = regexp.MustCompile("^" .. tostring(windows and '[a-zA-Z]:' or '') .. tostring(s) .. tostring(s) .. "?")
+  local convert
+  convert = function(goarray)
+    local tbl, len = { }, #goarray
+    for i = 1, len do
+      insert(tbl, goarray[i])
+    end
+    return tbl
+  end
+  local has_root
+  has_root = function(s)
+    return re_root:Match(s)
+  end
+  local array
+  array = function(tbl)
+    local len = #tbl
+    local i = 0
+    return function()
+      i = i + 1
+      if i > len then
+        return 
+      end
+      return i, tbl[i], len
+    end
+  end
+  return function(filepath)
+    if filepath == nil then
+      filepath = ""
+    end
+    if not (filepath ~= "" and type(filepath) == "string") then
+      return nil
+    end
     local pwd, err = os.Getwd()
     assert(not err, "failed to get current working directory")
-    if re_root:Match(_string) then
-      return _string, _string, _string, pwd
+    local work_string = filepath
+    if not (has_root(filepath)) then
+      work_string = pwd .. s .. work_string
     end
-    if re_abs:Match(_string) then
-      local split_path = re_part:Split(_string, -1)
-      local l = #split_path
-      local name = split_path[bound(l, 1, l)]
-      return _string, str.TrimSuffix(_string, name), name, pwd
+    local skip = 0
+    local canon_split = { }
+    for i, ent, len in array(re_part:FindAllString(work_string, -1)) do
+      local _continue_0 = false
+      repeat
+        local _exp_0 = true
+        if (ent == ".") == _exp_0 then
+          _continue_0 = true
+          break
+        elseif (ent == "..") == _exp_0 then
+          skip = skip + 1
+          _continue_0 = true
+          break
+        elseif (skip > 0) == _exp_0 then
+          skip = skip - 1
+          _continue_0 = true
+          break
+        elseif (skip > len - i) == _exp_0 then
+          return nil, "get_path_info: " .. tostring(work_string) .. " invalid path, too many parent traversals"
+        end
+        insert(canon_split, ent)
+        _continue_0 = true
+      until true
+      if not _continue_0 then
+        break
+      end
     end
-    local abs = (pwd .. s .. _string)
-    local split_path = re_part:Split(abs, -1)
-    local l = #split_path
-    local name = split_path[bound(l, 1, l)]
-    return abs, str.TrimSuffix(abs, name), name, pwd
+    local absolute = str.Join(canon_split, s)
+    if not (windows and (absolute:sub(1, 1)) == s) then
+      absolute = s .. absolute
+    end
+    canon_split = re_part:FindAllString(absolute, -1)
+    local len = #canon_split
+    local name = canon_split[len]
+    local parent = (str.TrimSuffix(absolute, name)) or ""
+    parent = (str.TrimSuffix(parent, s)) or ""
+    return absolute, parent, name, pwd
   end
 end)()
 local add_command
@@ -156,9 +216,10 @@ add_command = function(name, fn, cb)
     else
       _buf = any
     end
-    local dir, abs, name, pwd, _finfo
-    if _buf.Path and _buf.Path ~= '' then
-      abs, dir, name, pwd = get_path_info(_buf.Path)
+    local _finfo
+    local abs, dir, pwd
+    abs, dir, name, pwd = get_path_info(_buf.Path)
+    if pwd then
       _finfo = {
         dir = dir,
         abs = abs,
@@ -436,13 +497,12 @@ git = (function()
   end
   local send = setmetatable({ }, {
     __index = function(_, cmd)
-      cmd = cmd:gsub("_", "-")
       return function(msg, config)
         debug("git-" .. tostring(cmd) .. ": Issuing message - " .. tostring(msg))
         local line_count = select(2, string.gsub(tostring(msg), "[\r\n]", ""))
         debug("LineCount: " .. tostring(line_count))
         if line_count > 1 then
-          local header = "git-" .. tostring(cmd)
+          local header = "git." .. tostring(cmd)
           if type(config) == "table" then
             if config.header ~= nil then
               header = tostring(header) .. ": " .. tostring(config.header)
@@ -451,7 +511,7 @@ git = (function()
           send_block(header, msg)
           return 
         end
-        (app.InfoBar()):Message("git-" .. tostring(cmd) .. ": " .. tostring(msg))
+        (app.InfoBar()):Message("git." .. tostring(cmd) .. ": " .. tostring(msg))
       end
     end
   })
@@ -563,9 +623,21 @@ git = (function()
       end
       return chomp(out) == 'true'
     end
+    local top_level
+    top_level = function()
+      local out, err = exec("rev-parse", "--show-toplevel")
+      if not (out) then
+        return nil
+      end
+      return chomp(out)
+    end
     local get_branches
     get_branches = function()
-      local out, _ = exec("branch", "-al")
+      local out, err = exec("branch", "-al")
+      if err then
+        send.get_branches("failed to get branches: " .. tostring(err))
+        return nil, nil
+      end
       local branches = { }
       local current = ''
       each_line(chomp(out), function(line)
@@ -582,7 +654,8 @@ git = (function()
           return 
         end
         debug("Found branch: " .. tostring(name))
-        local revision, err = exec("rev-parse", name)
+        local revision
+        revision, err = exec("rev-parse", name)
         if err and err ~= "" then
           debug("Failed to rev-parse " .. tostring(name) .. ": " .. tostring(err))
           return 
@@ -609,16 +682,18 @@ git = (function()
       exec_async_cb = exec_async_cb,
       in_repo = in_repo,
       known_label = known_label,
-      get_branches = get_branches
+      get_branches = get_branches,
+      top_level = top_level
     }
   end
   local update_branch_status = (function()
     local re_sha_sum = regexp.MustCompile("^\\s*([0-9a-zA-Z]{40}?)\\s*$")
     return function(self, finfo, cmd)
-      if not (truthy(cfg.GetGlobalOption(tostring(NAME) .. ".updateinfo"))) then
+      GITLINE_ACTIVE = truthy(cfg.GetGlobalOption(tostring(NAME) .. ".updateinfo"))
+      if not (GITLINE_ACTIVE) then
         return 
       end
-      if not ((not self.Type.Scratch) and (self.Path ~= '') and finfo) then
+      if not (finfo and (not self.Type.Scratch) and (self.Path ~= '')) then
         return 
       end
       if not (cmd) then
@@ -919,6 +994,9 @@ git = (function()
     update_branch_status = update_branch_status,
     update_git_diff_base = update_git_diff_base,
     init = function(self, finfo)
+      if not (finfo) then
+        return send.init(errors.need_file)
+      end
       if is_scratch(self.Buf) then
         return send.init(errors.no_scratch)
       end
@@ -926,7 +1004,7 @@ git = (function()
       if not (cmd) then
         return send.init(err)
       end
-      if not (not cmd.in_repo()) then
+      if cmd.in_repo() then
         return send.init(errors.is_a_repo)
       end
       local out
@@ -940,8 +1018,11 @@ git = (function()
         Initialize a repository in the current panes directory
     ]],
     diff = function(self, finfo, ...)
+      if not (finfo) then
+        return send.diff(errors.need_file)
+      end
       if is_scratch(self.Buf) then
-        return send.init(errors.no_scratch)
+        return send.diff(errors.no_scratch)
       end
       local cmd, err = new_command(finfo.dir)
       if not (cmd) then
@@ -950,7 +1031,7 @@ git = (function()
       if not (cmd.in_repo()) then
         return send.diff(errors.not_a_repo)
       end
-      local diff_all, diff_staged = false, false
+      local diff_all, diff_staged, header = false, false, ''
       local diff_args = { }
       if ... then
         local _list_0 = {
@@ -968,11 +1049,15 @@ git = (function()
       end
       if diff_staged then
         table.insert(diff_args, "--cached")
+        header = header .. "(staged) "
       end
       if not diff_all then
-        local repo_relative_path = str.TrimPrefix(finfo.abs, finfo.pwd)
-        local repo_relative_file = str.TrimPrefix(self.Buf.Path, repo_relative_path)
-        table.insert(diff_args, repo_relative_file)
+        local repo_relative_file = str.TrimPrefix(finfo.abs, cmd.top_level())
+        repo_relative_file = str.TrimPrefix(repo_relative_file, "/")
+        table.insert(diff_args, "./" .. repo_relative_file)
+        header = header .. "REPO:./" .. tostring(repo_relative_file)
+      else
+        header = header .. "(showing all changes)"
       end
       local out
       out, err = cmd.exec("diff", unpack(diff_args))
@@ -982,7 +1067,9 @@ git = (function()
       if err then
         return send.diff(err)
       end
-      return send.diff(out)
+      return send.diff(out, {
+        header = header
+      })
     end,
     diff_help = [[      Usage: %pub%.diff
         Git diff HEAD for the current file
@@ -992,8 +1079,11 @@ git = (function()
         -a --all       Diff entire repository
     ]],
     fetch = function(self, finfo)
+      if not (finfo) then
+        return send.fetch(errors.need_file)
+      end
       if is_scratch(self.Buf) then
-        return send.init(errors.no_scratch)
+        return send.fetch(errors.no_scratch)
       end
       local cmd, err = new_command(finfo.dir)
       if not (cmd) then
@@ -1014,8 +1104,11 @@ git = (function()
     checkout = (function()
       local re_valid_label = regexp.MustCompile("^[a-zA-Z-_/.]+$")
       return function(self, finfo, label)
+        if not (finfo) then
+          return send.checkout(errors.need_file)
+        end
         if is_scratch(self.Buf) then
-          return send.init(errors.no_scratch)
+          return send.checkout(errors.no_scratch)
         end
         local cmd, err = new_command(finfo.dir)
         if not (cmd) then
@@ -1045,8 +1138,11 @@ git = (function()
         Checkout a specific branch, tag, or revision
     ]],
     list = function(self, finfo)
+      if not (finfo) then
+        return send.list(errors.need_file)
+      end
       if is_scratch(self.Buf) then
-        return send.init(errors.no_scratch)
+        return send.list(errors.no_scratch)
       end
       local cmd, err = new_command(finfo.dir)
       if not (cmd) then
@@ -1056,6 +1152,9 @@ git = (function()
         return send.checkout(errors.not_a_repo)
       end
       local branches, current = cmd.get_branches()
+      if not (branches) then
+        return 
+      end
       local output = ''
       output = output .. "Branches:\n"
       for _index_0 = 1, #branches do
@@ -1073,8 +1172,11 @@ git = (function()
         List branches, and note the currently active branch
     ]],
     status = function(self, finfo)
+      if not (finfo) then
+        return send.status(errors.need_file)
+      end
       if is_scratch(self.Buf) then
-        return send.init(errors.no_scratch)
+        return send.status(errors.no_scratch)
       end
       local cmd, err = new_command(finfo.dir)
       if not (cmd) then
@@ -1096,8 +1198,11 @@ git = (function()
     branch = (function()
       local re_valid_label = regexp.MustCompile("^[a-zA-Z-_/.]+$")
       return function(self, finfo, label)
+        if not (finfo) then
+          return send.branch(errors.need_file)
+        end
         if is_scratch(self.Buf) then
-          return send.init(errors.no_scratch)
+          return send.branch(errors.no_scratch)
         end
         local cmd, err = new_command(finfo.dir)
         if not (cmd) then
@@ -1137,8 +1242,11 @@ git = (function()
       base_msg = base_msg .. "# Please enter the commit message for your changes. Lines starting\n"
       base_msg = base_msg .. "# with '#' will be ignored, and an empty message aborts the commit.\n#\n"
       return function(self, finfo, msg)
+        if not (finfo) then
+          return send.commit(errors.need_file)
+        end
         if is_scratch(self.Buf) then
-          return send.init(errors.no_scratch)
+          return send.commit(errors.no_scratch)
         end
         local cmd, err = new_command(finfo.dir)
         if not (cmd) then
@@ -1200,8 +1308,11 @@ git = (function()
     push = (function()
       local re_valid_label = regexp.MustCompile("^[a-zA-Z-_/.]+$")
       return function(self, finfo, branch)
+        if not (finfo) then
+          return send.push(errors.need_file)
+        end
         if is_scratch(self.Buf) then
-          return send.init(errors.no_scratch)
+          return send.push(errors.no_scratch)
         end
         local cmd, err = new_command(finfo.dir)
         if not (cmd) then
@@ -1230,6 +1341,12 @@ git = (function()
         are pushed.
     ]],
     pull = function(self, finfo)
+      if not (finfo) then
+        return send.pull(errors.need_file)
+      end
+      if is_scratch(self.Buf) then
+        return send.pull(errors.no_scratch)
+      end
       local cmd, err = new_command(finfo.dir)
       if not (cmd) then
         return send.pull(err)
@@ -1247,8 +1364,11 @@ git = (function()
         Pull all changes from remote into the working tree
     ]],
     log = function(self, finfo)
+      if not (finfo) then
+        return send.log(errors.need_file)
+      end
       if is_scratch(self.Buf) then
-        return send.init(errors.no_scratch)
+        return send.log(errors.no_scratch)
       end
       local cmd, err = new_command(finfo.dir)
       if not (cmd) then
@@ -1276,8 +1396,11 @@ git = (function()
         Show the commit log
     ]],
     stage = function(self, finfo, ...)
+      if not (finfo) then
+        return send.stage(errors.need_file)
+      end
       if is_scratch(self.Buf) then
-        return send.init(errors.no_scratch)
+        return send.stage(errors.no_scratch)
       end
       local cmd, err = new_command(finfo.dir)
       if not (cmd) then
@@ -1330,8 +1453,11 @@ git = (function()
         -a --all   Stage all files
     ]],
     unstage = function(self, finfo, ...)
+      if not (finfo) then
+        return send.unstage(errors.need_file)
+      end
       if is_scratch(self.Buf) then
-        return send.init(errors.no_scratch)
+        return send.unstage(errors.no_scratch)
       end
       local cmd, err = new_command(finfo.dir)
       if not (cmd) then
@@ -1384,8 +1510,11 @@ git = (function()
         -a --all   Unstage all files
     ]],
     rm = function(self, finfo, ...)
+      if not (finfo) then
+        return send.rm(errors.need_file)
+      end
       if is_scratch(self.Buf) then
-        return send.init(errors.no_scratch)
+        return send.rm(errors.no_scratch)
       end
       local cmd, err = new_command(finfo.dir)
       if not (cmd) then
@@ -1435,18 +1564,24 @@ git = (function()
         Stage the removal of a file (or files) from the git repo.
     ]],
     debug = function(self, finfo, ...)
+      if not (finfo) then
+        return send.debug(errors.need_file)
+      end
       local debug_output = ''
       local cmd, err = new_command(finfo.dir)
       if not (cmd) then
         return send.debug(err)
       end
       local _, branch = cmd.get_branches()
+      if not (branch) then
+        branch = "Error"
+      end
       debug_output = debug_output .. "File: " .. tostring(finfo.abs) .. "\n"
       debug_output = debug_output .. "Name: " .. tostring(finfo.name) .. "\n"
       debug_output = debug_output .. "PWD: " .. tostring(finfo.pwd) .. "\n"
       debug_output = debug_output .. "Directory: " .. tostring(finfo.dir) .. "\n"
       debug_output = debug_output .. "Absolute Path: " .. tostring(finfo.abs) .. "\n"
-      debug_output = debug_output .. "In Repo: " .. tostring(cmd.in_repo()) .. "\n"
+      debug_output = debug_output .. "In Repo: " .. tostring(cmd.in_repo() or false) .. "\n"
       debug_output = debug_output .. "Branch: " .. tostring(branch) .. "\n"
       debug_output = debug_output .. "\n"
       debug_output = debug_output .. "_G.ACTIVE_UPDATES\n"
@@ -1486,11 +1621,17 @@ git = (function()
   }
 end)()
 numahead = function(self)
-  if not (self.Path and self.Path ~= '') then
+  if not (GITLINE_ACTIVE) then
     return "-"
   end
   local repoid, branch, abs
   abs = get_path_info(self.Path)
+  if not (abs) then
+    return "-"
+  end
+  if not (BUFFER_REPO[abs]) then
+    return "-"
+  end
   if not (BUFFER_REPO[abs]) then
     return "-"
   end
@@ -1508,11 +1649,14 @@ numahead = function(self)
   return tostring(REPO_STATUS[repoid][branch].ahead)
 end
 numbehind = function(self)
-  if not (self.Path and self.Path ~= '') then
+  if not (GITLINE_ACTIVE) then
     return "-"
   end
   local repoid, branch, abs
   abs = get_path_info(self.Path)
+  if not (abs) then
+    return "-"
+  end
   if not (BUFFER_REPO[abs]) then
     return "-"
   end
@@ -1530,11 +1674,14 @@ numbehind = function(self)
   return tostring(REPO_STATUS[repoid][branch].behind)
 end
 numstaged = function(self)
-  if not (self.Path and self.Path ~= '') then
+  if not (GITLINE_ACTIVE) then
     return "-"
   end
   local repoid, branch, abs
   abs = get_path_info(self.Path)
+  if not (abs) then
+    return "-"
+  end
   if not (BUFFER_REPO[abs]) then
     return "-"
   end
@@ -1552,11 +1699,14 @@ numstaged = function(self)
   return tostring(REPO_STATUS[repoid][branch].staged)
 end
 oncommit = function(self)
-  if not (self.Path and self.Path ~= '') then
+  if not (GITLINE_ACTIVE) then
     return "-"
   end
   local repoid, branch, abs
   abs = get_path_info(self.Path)
+  if not (abs) then
+    return "-"
+  end
   if not (BUFFER_REPO[abs]) then
     return "-"
   end
@@ -1574,11 +1724,11 @@ oncommit = function(self)
   return tostring(REPO_STATUS[repoid][branch].commit)
 end
 onbranch = function(self)
-  if not (self.Path and self.Path ~= '') then
-    return "-"
-  end
   local repoid, branch, abs
   abs = get_path_info(self.Path)
+  if not (abs) then
+    return "-"
+  end
   if not (BUFFER_REPO[abs]) then
     return "-"
   end
@@ -1651,29 +1801,36 @@ init = function()
   add_command("unstage", git.unstage, cfg.FileComplete)
   add_command("rm", git.rm, cfg.FileComplete)
   add_command("diff", git.diff, cfg.FileComplete)
+  add_command("debug", git.debug, cfg.FileComplete)
   return generate_help()
 end
 onBufPaneOpen = function(self)
   debug("Caught onBufPaneOpen bufpane:" .. tostring(self))
+  local _finfo
   local abs, dir, name, pwd = get_path_info(self.Buf.Path)
-  local _finfo = {
-    dir = dir,
-    abs = abs,
-    name = name,
-    pwd = pwd
-  }
+  if pwd then
+    _finfo = {
+      dir = dir,
+      abs = abs,
+      name = name,
+      pwd = pwd
+    }
+  end
   git.update_branch_status(self.Buf, _finfo)
   git.update_git_diff_base(self.Buf, _finfo)
 end
 onSave = function(self)
   debug("Caught onSave bufpane:" .. tostring(self))
+  local _finfo
   local abs, dir, name, pwd = get_path_info(self.Buf.Path)
-  local _finfo = {
-    dir = dir,
-    abs = abs,
-    name = name,
-    pwd = pwd
-  }
+  if pwd then
+    _finfo = {
+      dir = dir,
+      abs = abs,
+      name = name,
+      pwd = pwd
+    }
+  end
   git.update_branch_status(self.Buf, _finfo)
   git.update_git_diff_base(self.Buf, _finfo)
   if not (#ACTIVE_COMMITS > 0) then
@@ -1690,12 +1847,10 @@ end
 onQuit = function(self)
   debug("Caught onQuit, buf:" .. tostring(self))
   run_callbacks("onQuit", self)
-  if self.Path and self.Path ~= '' then
-    local _, abs
-    _, abs, _ = get_path_info(self.Path)
-    if BUFFER_REPO[abs] then
-      BUFFER_REPO[abs] = nil
-    end
+  local _, abs
+  _, abs, _ = get_path_info(self.Path)
+  if abs and BUFFER_REPO[abs] then
+    BUFFER_REPO[abs] = nil
   end
   if not (#ACTIVE_COMMITS > 0) then
     return 
