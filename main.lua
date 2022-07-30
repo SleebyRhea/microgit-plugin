@@ -1327,7 +1327,7 @@ git = (function()
         Stage a file (or files) to commit.
 
       Options:
-        --all   Stage all files
+        -a --all   Stage all files
     ]],
     unstage = function(self, finfo, ...)
       if is_scratch(self.Buf) then
@@ -1651,7 +1651,6 @@ init = function()
   add_command("unstage", git.unstage, cfg.FileComplete)
   add_command("rm", git.rm, cfg.FileComplete)
   add_command("diff", git.diff, cfg.FileComplete)
-  add_command("debug", git.debug, cfg.FileComplete)
   return generate_help()
 end
 onBufPaneOpen = function(self)

@@ -480,6 +480,7 @@ git = (->
       return send.in_repo err if err
       return chomp(out) == 'true'
 
+
     --- Parse all of the known branches and return both those branches, and the 
     -- name of the current branch
     get_branches = ->
@@ -1154,7 +1155,7 @@ git = (->
         Stage a file (or files) to commit.
 
       Options:
-        --all   Stage all files
+        -a --all   Stage all files
     ]]
 
     unstage: (finfo, ...) =>
