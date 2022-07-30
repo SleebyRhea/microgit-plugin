@@ -29,6 +29,7 @@ runtime = go.import"runtime"
 
 ACTIVE_UPDATES = {}
 ACTIVE_COMMITS = {}
+CALLBACKS_SET = {}
 BUFFER_REPO = {}
 REPO_STATUS = {}
 
@@ -64,11 +65,11 @@ replace_home = (_path) ->
     when truthy str.HasPrefix(_path, "~")
       home, err = os.UserHomeDir!
       return nil, err if err
-      return str.Replace _path, "~", 1
+      return str.Replace _path, "~", (home .. string.char os.PathSeparator), 1
     when truthy str.HasPrefix(_path, "%USERPROFILE%")
       home, err = os.UserHomeDir!
       return nil, err if err
-      return str.Replace _path, "%USERPROFILE%", 1
+      return str.Replace _path, "%USERPROFILE%", (home .. string.char os.PathSeparator), 1
   return _path
 
 
@@ -233,6 +234,25 @@ generate_help = (->
     cfg.AddRuntimeFileFromMemory cfg.RTHelp, "#{NAME}.statusline", statusline_help
 )!
 
+
+--- Add a function to the list of callbacks for the given callback string
+add_callback = (callback, fn) ->
+  unless CALLBACKS_SET[callback]
+    CALLBACKS_SET[callback] = {}
+  table.insert CALLBACKS_SET[callback], fn
+
+
+--- Run all callbacks for the given callback against the arguments provided
+-- If callback returns a truthy value, it is removed from the list. Otherwise
+-- it is retained
+run_callbacks = (callback, ...) ->
+  active = {}
+  for i, fn in ipairs (CALLBACKS_SET["onQuit"] or {})
+    unless fn ...
+      table.insert active, fn
+  CALLBACKS_SET["onQuit"] = active
+      
+
 --- Generate a function that takes a number, and returns the correct plurality of a word
 wordify = (word, singular, plural) ->
   singular = word .. singular
@@ -306,12 +326,12 @@ make_empty_hsplit = (root, rszfn, header, output, filepath) ->
 make_empty_vsplit = (root, rszfn, header, output, filepath) ->
   local pane
   old_view = root\GetView!
-  h = old_view.Height
+  w = old_view.Width
   if filepath
     pane = root\VSplitIndex(buf.NewBufferFromFile(filepath, true), true)
   else
     pane = root\VSplitIndex(buf.NewBuffer(output, ""), true)
-  pane\ResizePane rszfn h
+  pane\ResizePane rszfn w
   pane.Buf.Type.Scratch = true
   pane.Buf.Type.Readonly = true
   pane.Buf.Type.Syntax = false
@@ -332,31 +352,6 @@ make_empty_vsplit = (root, rszfn, header, output, filepath) ->
 send_block = (header, output, syntax=false) ->
   pane = make_empty_hsplit app.CurPane!, ((h) -> h - (h / 5)), header, output
   pane.Buf.Type.Syntax = truthy syntax
-
-
---- Create a new pane with the contents of output. Add that
--- pane to the list of ACTIVE_COMMITS, and write the contents of output to
--- a temporary file.
---
--- The provided callback function should have the signature with string being
--- a filepath.
---   (string) ->
-make_commit_pane = (root, output, fn) ->
-  filepath = make_temp 'commit'
-  ioutil.WriteFile filepath, output, 0x1B0 -- 0660, to account for octal
-  
-  header = "[new commit: save and quit to finalize]"
-  pane = make_empty_hsplit root, ((h) -> h - (h / 3)), header, output, filepath
-  pane.Buf.Type.Scratch = false
-  pane.Buf.Type.Readonly = false
-
-  table.insert ACTIVE_COMMITS, {
-    callback: fn
-    file: filepath
-    done: false
-    pane: pane
-    root: root
-  }
 
 
 git = (->
@@ -562,7 +557,6 @@ git = (->
       diff_string_err = ''
       branch_err = ''
 
-
       detached = false
 
       set_empty = (reason) ->
@@ -581,14 +575,17 @@ git = (->
         BUFFER_REPO[finfo.abs].__updating = false
 
       start_get_countstaged = ->
-        unless diff_string and diff_string != ''
-          return set_empty "got empty diff string"
         unless diff_string_err == ''
           return set_empty "error encountered getting diff string: #{diff_string_err}"
+
+        a, b = 0, 0
+        unless diff_string and diff_string != ''
+          originless = false
+          a, b = (chomp diff_string)\match("^(%d+)%s+(%d+)$")
         
-        a, b = (chomp diff_string)\match("^(%d+)%s+(%d+)$")
         REPO_STATUS[first_commit][branch].ahead = a
         REPO_STATUS[first_commit][branch].behind = b
+          
         cmd.exec_async_cb "diff",
           ((out) -> count_staged ..= out),
           ((err) -> count_staged_err ..= err),
@@ -759,6 +756,48 @@ git = (->
       ((out) -> top_level ..= out),
       start_get_diffbase,
       "--show-toplevel"  
+
+  --- Create a new pane with the contents of output. Add that
+  -- pane to the list of ACTIVE_COMMITS, and write the contents of output to
+  -- a temporary file.
+  --
+  -- The provided callback function should have the signature with string being
+  -- a filepath.
+  --   (string) ->
+  make_commit_pane = (root, cmd, output, fn) ->
+    filepath = make_temp 'commit'
+    ioutil.WriteFile filepath, output, 0x1B0 -- 0660, to account for octal
+    
+    commit_header = "[new commit: save and quit to finalize]"
+    commit_pane = make_empty_hsplit root, ((h) -> h - (h / 3)), commit_header, output, filepath
+    commit_pane.Buf.Type.Scratch = false
+    commit_pane.Buf.Type.Readonly = false
+
+    callback = fn
+    diff_header = "[changes staged for commit]"
+    diff_output = cmd.exec "diff", "--cached"
+    if diff_output != ''
+      closed = false
+      diff_pane = make_empty_vsplit commit_pane, ((w) -> w / 2 ), diff_header, diff_output
+      diff_pane.Buf.Type.Scratch = false
+
+      add_callback "onQuit", (any) ->
+        if (any == diff_pane) or (any == diff_pane.Buf)
+          closed = true
+        return closed
+        
+      callback = (...) ->
+        diff_pane\ForceQuit! unless closed
+        closed = true
+        fn ...
+
+    table.insert ACTIVE_COMMITS, {
+      pane: commit_pane
+      file: filepath
+      done: false
+      root: root
+      :callback
+    }
 
   return {
     :update_branch_status
@@ -975,7 +1014,9 @@ git = (->
         each_line chomp(status_out), (line) ->
           commit_msg_start ..= "# #{line}\n"
         
-        make_commit_pane self, commit_msg_start, (file, _) ->
+        make_commit_pane self, cmd, commit_msg_start, (file, _) ->
+          return unless file
+          
           commit_msg = ioutil.ReadFile file
           commit_msg = str.TrimSuffix commit_msg, commit_msg_start
           
@@ -1092,7 +1133,7 @@ git = (->
       files = {}
       for file in *{...}
         continue if file == ".."
-        if file == "--all"
+        if file == "--all" or file =="-a"
           files = { "." }
           break
 
@@ -1129,7 +1170,7 @@ git = (->
       all = false
       for file in *{...}
         continue if file == ".."
-        if file == "--all"
+        if file == "--all" or file == "-a"
           files = {}
           all = true
           break
@@ -1151,7 +1192,7 @@ git = (->
         Unstage a file (or files) to commit.
 
       Options:
-        --all   Unstage all files
+        -a --all   Unstage all files
     ]]
 
     rm: (finfo, ...) =>
@@ -1204,27 +1245,32 @@ git = (->
       debug_output ..= "Branch: #{branch}\n"
 
       debug_output ..= "\n"
-      debug_output ..= "_G:ACTIVE_UPDATES\n"
+      debug_output ..= "_G.ACTIVE_UPDATES\n"
       for k, v in pairs ACTIVE_UPDATES
         debug_output ..= "  Updating Diff: #{k}: #{v}\n"
 
-      debug_output ..= "_G:ACTIVE_COMMITS\n"
+      debug_output ..= "_G.ACTIVE_COMMITS\n"
       for k, v in pairs ACTIVE_COMMITS
         debug_output ..= "  Active Commits: #{k}: #{v}\n"
         
-      debug_output ..= "_G:BUFFER_REPO\n"
+      debug_output ..= "_G.BUFFER_REPO\n"
       for k, v in pairs BUFFER_REPO
         debug_output ..= "  File: #{k}\n"
         debug_output ..= "    #{v.repoid}\n"
         debug_output ..= "    #{v.branch}\n"
         
-      debug_output ..= "_G:REPO_STATUS\n"
+      debug_output ..= "_G.REPO_STATUS\n"
       for k, v in pairs REPO_STATUS
         debug_output ..= "  Repo: #{k}\n"
         for b, data in pairs REPO_STATUS[k]
           debug_output ..= "    Branch: #{b}\n"
           debug_output ..= "      a:#{data.ahead}, b:#{data.behind}, "
           debug_output ..= "c:#{data.commit}, s:#{data.staged}\n"
+
+      debug_output ..= "_G.CALLBACKS_SET\n"
+      for k, v in pairs CALLBACKS_SET
+        for cb, fn in pairs CALLBACKS_SET[k]
+          debug_output ..= "  #{cb}:#{fn}"
 
       return send.debug debug_output
     debug_help: [[
@@ -1406,6 +1452,7 @@ export onSave = =>
 -- commit save prompt and offer a confirmation to save and commit.
 export onQuit = =>
   debug "Caught onQuit, buf:#{@}"
+  run_callbacks "onQuit", self
 
   if @Path and @Path != ''
     _, abs, _ = get_path_info @Path
@@ -1428,19 +1475,18 @@ export onQuit = =>
             ACTIVE_COMMITS = active
             break
       else
-        if @Buf\Modified!
-          -- We need to override the current YNPrompt if it exists,
-          -- and then close it. This way, we can hijack the save/quit
-          -- prompt and inject our own
-          --
-          -- TODO: Get rid of the hijack, or find some way to make it
-          --       less terrible. Ideally, we actually want to tell it
-          --       to cancel properly, but AbortCommand() does not call
-          --       the InfoBar.YNPrompt() callback with true as the 2nd
-          --       boolean (which it probably should)
-          info = app.InfoBar!
+        info = app.InfoBar!
+        unless @Buf\Modified!
+          info\Message "Aborted commit (closed without saving)"
+          commit.callback false
+          os.Remove commit.file
+          for t, _temp in ipairs active
+            if _temp == commit
+              table.remove active, t
+              ACTIVE_COMMITS = active
+              break
+        else
           if info.HasYN and info.HasPrompt
-            debug "Removing message: #{info.Message}"
             info.YNCallback = ->
             info\AbortCommand!
           
@@ -1451,21 +1497,16 @@ export onQuit = =>
               if yes
                 @Buf\Save!
                 @ForceQuit!
-                
                 commit.callback commit.file
-                debug "Removing #{commit.file}"
                 os.Remove commit.file
-                debug "Popping commit #{i} from stack"
-                
-                for t, _temp in ipairs ACTIVE_COMMITS
-                  if _temp == commit
-                    table.remove ACTIVE_COMMITS, t
-                    break
-                    
-                return
               else
-                info\Message "Aborted commit (closed before saving)"
+                info\Message "Aborted commit (closed without saving)"
+                os.Remove commit.file
+                commit.callback false
                 @ForceQuit!
-              return
-        break
+
+              for t, _temp in ipairs ACTIVE_COMMITS
+                if _temp == commit
+                  table.remove ACTIVE_COMMITS, t
+                  break
   return

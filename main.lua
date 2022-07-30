@@ -23,6 +23,7 @@ local regexp = go.import("regexp")
 local runtime = go.import("runtime")
 local ACTIVE_UPDATES = { }
 local ACTIVE_COMMITS = { }
+local CALLBACKS_SET = { }
 local BUFFER_REPO = { }
 local REPO_STATUS = { }
 local LOADED_COMMANDS
@@ -83,13 +84,13 @@ replace_home = function(_path)
     if err then
       return nil, err
     end
-    return str.Replace(_path, "~", 1)
+    return str.Replace(_path, "~", (home .. string.char(os.PathSeparator)), 1)
   elseif truthy(str.HasPrefix(_path, "%USERPROFILE%")) == _exp_0 then
     local home, err = os.UserHomeDir()
     if err then
       return nil, err
     end
-    return str.Replace(_path, "%USERPROFILE%", 1)
+    return str.Replace(_path, "%USERPROFILE%", (home .. string.char(os.PathSeparator)), 1)
   end
   return _path
 end
@@ -306,6 +307,23 @@ local generate_help = (function()
     return cfg.AddRuntimeFileFromMemory(cfg.RTHelp, tostring(NAME) .. ".statusline", statusline_help)
   end
 end)()
+local add_callback
+add_callback = function(callback, fn)
+  if not (CALLBACKS_SET[callback]) then
+    CALLBACKS_SET[callback] = { }
+  end
+  return table.insert(CALLBACKS_SET[callback], fn)
+end
+local run_callbacks
+run_callbacks = function(callback, ...)
+  local active = { }
+  for i, fn in ipairs((CALLBACKS_SET["onQuit"] or { })) do
+    if not (fn(...)) then
+      table.insert(active, fn)
+    end
+  end
+  CALLBACKS_SET["onQuit"] = active
+end
 local wordify
 wordify = function(word, singular, plural)
   singular = word .. singular
@@ -376,13 +394,13 @@ local make_empty_vsplit
 make_empty_vsplit = function(root, rszfn, header, output, filepath)
   local pane
   local old_view = root:GetView()
-  local h = old_view.Height
+  local w = old_view.Width
   if filepath then
     pane = root:VSplitIndex(buf.NewBufferFromFile(filepath, true), true)
   else
     pane = root:VSplitIndex(buf.NewBuffer(output, ""), true)
   end
-  pane:ResizePane(rszfn(h))
+  pane:ResizePane(rszfn(w))
   pane.Buf.Type.Scratch = true
   pane.Buf.Type.Readonly = true
   pane.Buf.Type.Syntax = false
@@ -407,24 +425,6 @@ send_block = function(header, output, syntax)
     return h - (h / 5)
   end), header, output)
   pane.Buf.Type.Syntax = truthy(syntax)
-end
-local make_commit_pane
-make_commit_pane = function(root, output, fn)
-  local filepath = make_temp('commit')
-  ioutil.WriteFile(filepath, output, 0x1B0)
-  local header = "[new commit: save and quit to finalize]"
-  local pane = make_empty_hsplit(root, (function(h)
-    return h - (h / 3)
-  end), header, output, filepath)
-  pane.Buf.Type.Scratch = false
-  pane.Buf.Type.Readonly = false
-  return table.insert(ACTIVE_COMMITS, {
-    callback = fn,
-    file = filepath,
-    done = false,
-    pane = pane,
-    root = root
-  })
 end
 git = (function()
   local w_commit = wordify('commit', '', 's')
@@ -677,13 +677,14 @@ git = (function()
       end
       local start_get_countstaged
       start_get_countstaged = function()
-        if not (diff_string and diff_string ~= '') then
-          return set_empty("got empty diff string")
-        end
         if not (diff_string_err == '') then
           return set_empty("error encountered getting diff string: " .. tostring(diff_string_err))
         end
-        local a, b = (chomp(diff_string)):match("^(%d+)%s+(%d+)$")
+        local a, b = 0, 0
+        if not (diff_string and diff_string ~= '') then
+          local originless = false
+          a, b = (chomp(diff_string)):match("^(%d+)%s+(%d+)$")
+        end
         REPO_STATUS[first_commit][branch].ahead = a
         REPO_STATUS[first_commit][branch].behind = b
         return cmd.exec_async_cb("diff", (function(out)
@@ -872,6 +873,47 @@ git = (function()
     end), (function(out)
       top_level = top_level .. out
     end), start_get_diffbase, "--show-toplevel")
+  end
+  local make_commit_pane
+  make_commit_pane = function(root, cmd, output, fn)
+    local filepath = make_temp('commit')
+    ioutil.WriteFile(filepath, output, 0x1B0)
+    local commit_header = "[new commit: save and quit to finalize]"
+    local commit_pane = make_empty_hsplit(root, (function(h)
+      return h - (h / 3)
+    end), commit_header, output, filepath)
+    commit_pane.Buf.Type.Scratch = false
+    commit_pane.Buf.Type.Readonly = false
+    local callback = fn
+    local diff_header = "[changes staged for commit]"
+    local diff_output = cmd.exec("diff", "--cached")
+    if diff_output ~= '' then
+      local closed = false
+      local diff_pane = make_empty_vsplit(commit_pane, (function(w)
+        return w / 2
+      end), diff_header, diff_output)
+      diff_pane.Buf.Type.Scratch = false
+      add_callback("onQuit", function(any)
+        if (any == diff_pane) or (any == diff_pane.Buf) then
+          closed = true
+        end
+        return closed
+      end)
+      callback = function(...)
+        if not (closed) then
+          diff_pane:ForceQuit()
+        end
+        closed = true
+        return fn(...)
+      end
+    end
+    return table.insert(ACTIVE_COMMITS, {
+      pane = commit_pane,
+      file = filepath,
+      done = false,
+      root = root,
+      callback = callback
+    })
   end
   return {
     update_branch_status = update_branch_status,
@@ -1118,7 +1160,10 @@ git = (function()
         each_line(chomp(status_out), function(line)
           commit_msg_start = commit_msg_start .. "# " .. tostring(line) .. "\n"
         end)
-        make_commit_pane(self, commit_msg_start, function(file, _)
+        make_commit_pane(self, cmd, commit_msg_start, function(file, _)
+          if not (file) then
+            return 
+          end
           local commit_msg = ioutil.ReadFile(file)
           commit_msg = str.TrimSuffix(commit_msg, commit_msg_start)
           if commit_msg == "" then
@@ -1253,7 +1298,7 @@ git = (function()
             _continue_0 = true
             break
           end
-          if file == "--all" then
+          if file == "--all" or file == "-a" then
             files = {
               "."
             }
@@ -1308,7 +1353,7 @@ git = (function()
             _continue_0 = true
             break
           end
-          if file == "--all" then
+          if file == "--all" or file == "-a" then
             files = { }
             all = true
             break
@@ -1336,7 +1381,7 @@ git = (function()
         Unstage a file (or files) to commit.
 
       Options:
-        --all   Unstage all files
+        -a --all   Unstage all files
     ]],
     rm = function(self, finfo, ...)
       if is_scratch(self.Buf) then
@@ -1404,27 +1449,33 @@ git = (function()
       debug_output = debug_output .. "In Repo: " .. tostring(cmd.in_repo()) .. "\n"
       debug_output = debug_output .. "Branch: " .. tostring(branch) .. "\n"
       debug_output = debug_output .. "\n"
-      debug_output = debug_output .. "_G:ACTIVE_UPDATES\n"
+      debug_output = debug_output .. "_G.ACTIVE_UPDATES\n"
       for k, v in pairs(ACTIVE_UPDATES) do
         debug_output = debug_output .. "  Updating Diff: " .. tostring(k) .. ": " .. tostring(v) .. "\n"
       end
-      debug_output = debug_output .. "_G:ACTIVE_COMMITS\n"
+      debug_output = debug_output .. "_G.ACTIVE_COMMITS\n"
       for k, v in pairs(ACTIVE_COMMITS) do
         debug_output = debug_output .. "  Active Commits: " .. tostring(k) .. ": " .. tostring(v) .. "\n"
       end
-      debug_output = debug_output .. "_G:BUFFER_REPO\n"
+      debug_output = debug_output .. "_G.BUFFER_REPO\n"
       for k, v in pairs(BUFFER_REPO) do
         debug_output = debug_output .. "  File: " .. tostring(k) .. "\n"
         debug_output = debug_output .. "    " .. tostring(v.repoid) .. "\n"
         debug_output = debug_output .. "    " .. tostring(v.branch) .. "\n"
       end
-      debug_output = debug_output .. "_G:REPO_STATUS\n"
+      debug_output = debug_output .. "_G.REPO_STATUS\n"
       for k, v in pairs(REPO_STATUS) do
         debug_output = debug_output .. "  Repo: " .. tostring(k) .. "\n"
         for b, data in pairs(REPO_STATUS[k]) do
           debug_output = debug_output .. "    Branch: " .. tostring(b) .. "\n"
           debug_output = debug_output .. "      a:" .. tostring(data.ahead) .. ", b:" .. tostring(data.behind) .. ", "
           debug_output = debug_output .. "c:" .. tostring(data.commit) .. ", s:" .. tostring(data.staged) .. "\n"
+        end
+      end
+      debug_output = debug_output .. "_G.CALLBACKS_SET\n"
+      for k, v in pairs(CALLBACKS_SET) do
+        for cb, fn in pairs(CALLBACKS_SET[k]) do
+          debug_output = debug_output .. "  " .. tostring(cb) .. ":" .. tostring(fn)
         end
       end
       return send.debug(debug_output)
@@ -1600,6 +1651,7 @@ init = function()
   add_command("unstage", git.unstage, cfg.FileComplete)
   add_command("rm", git.rm, cfg.FileComplete)
   add_command("diff", git.diff, cfg.FileComplete)
+  add_command("debug", git.debug, cfg.FileComplete)
   return generate_help()
 end
 onBufPaneOpen = function(self)
@@ -1638,6 +1690,7 @@ onSave = function(self)
 end
 onQuit = function(self)
   debug("Caught onQuit, buf:" .. tostring(self))
+  run_callbacks("onQuit", self)
   if self.Path and self.Path ~= '' then
     local _, abs
     _, abs, _ = get_path_info(self.Path)
@@ -1674,10 +1727,20 @@ onQuit = function(self)
           end
         end
       else
-        if self.Buf:Modified() then
-          local info = app.InfoBar()
+        local info = app.InfoBar()
+        if not (self.Buf:Modified()) then
+          info:Message("Aborted commit (closed without saving)")
+          commit.callback(false)
+          os.Remove(commit.file)
+          for t, _temp in ipairs(active) do
+            if _temp == commit then
+              table.remove(active, t)
+              ACTIVE_COMMITS = active
+              break
+            end
+          end
+        else
           if info.HasYN and info.HasPrompt then
-            debug("Removing message: " .. tostring(info.Message))
             info.YNCallback = function() end
             info:AbortCommand()
           end
@@ -1689,23 +1752,21 @@ onQuit = function(self)
               self.Buf:Save()
               self:ForceQuit()
               commit.callback(commit.file)
-              debug("Removing " .. tostring(commit.file))
               os.Remove(commit.file)
-              debug("Popping commit " .. tostring(i) .. " from stack")
-              for t, _temp in ipairs(ACTIVE_COMMITS) do
-                if _temp == commit then
-                  table.remove(ACTIVE_COMMITS, t)
-                  break
-                end
-              end
-              return 
             else
-              info:Message("Aborted commit (closed before saving)")
+              info:Message("Aborted commit (closed without saving)")
+              os.Remove(commit.file)
+              commit.callback(false)
               self:ForceQuit()
+            end
+            for t, _temp in ipairs(ACTIVE_COMMITS) do
+              if _temp == commit then
+                table.remove(ACTIVE_COMMITS, t)
+                break
+              end
             end
           end)
         end
-        break
       end
     end
   end
