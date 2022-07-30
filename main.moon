@@ -55,6 +55,24 @@ errors = {
 }
 
 
+--- Add a function to the list of callbacks for the given callback string
+add_callback = (callback, fn) ->
+  unless CALLBACKS_SET[callback]
+    CALLBACKS_SET[callback] = {}
+  table.insert CALLBACKS_SET[callback], fn
+
+
+--- Run all callbacks for the given callback against the arguments provided
+-- If callback returns a truthy value, it is removed from the list. Otherwise
+-- it is retained
+run_callbacks = (callback, ...) ->
+  active = {}
+  for i, fn in ipairs (CALLBACKS_SET[callback] or {})
+    unless fn ...
+      table.insert active, fn
+  CALLBACKS_SET[callback] = active
+      
+
 --- Delete leading and trailing spaces, and the final newline
 chomp = (s) ->
   s = s\gsub("^%s*", "")\gsub("%s*$", "")\gsub("[\n\r]*$", "")
@@ -167,31 +185,33 @@ get_path_info = (->
 --- Register a provided function+callback as a command
 -- Wraps the given function to account for Micros handling of arguments placing
 -- additional arguments of len size > 1 in a Go array
-add_command = (name, fn, cb) ->
+add_command = (name, fn, config={}) ->
   return if LOADED_COMMANDS[name]
 
   external_name = "git.#{name}"
+  callbacks = config.callbacks or {}
+  completer = config.completer or cfg.NoComplete
+
+  add_callback external_name, (...) ->
+    for cb in *callbacks
+      cb ...
+    return false
+  
   cmd = (any, extra) ->
-    local _path, _buf
-
-    if any and any.Buf then
-      _buf = any.Buf
-    else
-      _buf = any
-
     local _finfo
+
+    debug "command[#{external_name}] started"
+    _buf = any.Buf or any
     abs, dir, name, pwd = get_path_info _buf.Path
     _finfo = { :dir, :abs, :name, :pwd } if pwd
     
-    debug "command[#{external_name}] started"
-    fn any, _finfo, unpack([a for a in *(extra or {})])  
-    git.update_branch_status _buf, _finfo
-    git.update_git_diff_base _buf, _finfo
+    fn any, _finfo, unpack([a for a in *(extra or {})])
+    run_callbacks external_name, _buf, _finfo
     debug "command[#{external_name}] completed"
     
     return
 
-  cfg.MakeCommand external_name, cmd, cb
+  cfg.MakeCommand external_name, cmd, completer
   LOADED_COMMANDS[name] = { :cmd, help: git[name .. "_help"] }
   table.insert LOADED_COMMANDS.__order, name
 
@@ -271,24 +291,6 @@ generate_help = (->
     cfg.AddRuntimeFileFromMemory cfg.RTHelp, "#{NAME}.statusline", statusline_help
 )!
 
-
---- Add a function to the list of callbacks for the given callback string
-add_callback = (callback, fn) ->
-  unless CALLBACKS_SET[callback]
-    CALLBACKS_SET[callback] = {}
-  table.insert CALLBACKS_SET[callback], fn
-
-
---- Run all callbacks for the given callback against the arguments provided
--- If callback returns a truthy value, it is removed from the list. Otherwise
--- it is retained
-run_callbacks = (callback, ...) ->
-  active = {}
-  for i, fn in ipairs (CALLBACKS_SET["onQuit"] or {})
-    unless fn ...
-      table.insert active, fn
-  CALLBACKS_SET["onQuit"] = active
-      
 
 --- Generate a function that takes a number, and returns the correct plurality of a word
 wordify = (word, singular, plural) ->
@@ -1079,7 +1081,7 @@ git = (->
         each_line chomp(status_out), (line) ->
           commit_msg_start ..= "# #{line}\n"
         
-        make_commit_pane self, cmd, commit_msg_start, (file, _) ->
+        make_commit_pane self, cmd, commit_msg_start, (buffer, file, _) ->
           return unless file
           
           commit_msg = ioutil.ReadFile file
@@ -1103,6 +1105,10 @@ git = (->
           commit_out, err = cmd.exec "commit", "-F", file
           return send.commit err if err
           send.commit commit_out
+          
+          update_branch_status buffer, finfo
+          update_git_diff_base buffer, finfo
+          
 
         debug "Awaiting commit completion within onQuit"
         return
@@ -1489,21 +1495,77 @@ export init = ->
     if cmd == '' or not cmd
       app.TermMessage "#{NAME}: git not present in $PATH or set, some functionality will not work correctly"
 
-  add_command "init", git.init, cfg.NoComplete
-  add_command "pull", git.pull, cfg.NoComplete
-  add_command "push", git.push, cfg.NoComplete
-  add_command "list", git.list, cfg.NoComplete
-  add_command "log", git.log, cfg.NoComplete
-  add_command "commit", git.commit, cfg.NoComplete
-  add_command "status", git.status, cfg.NoComplete
-  add_command "branch", git.branch, cfg.NoComplete
-  add_command "fetch", git.fetch, cfg.NoComplete
-  add_command "checkout", git.checkout, cfg.NoComplete
-  add_command "stage", git.stage, cfg.FileComplete
-  add_command "unstage", git.unstage, cfg.FileComplete
-  add_command "rm", git.rm, cfg.FileComplete
-  add_command "diff", git.diff, cfg.FileComplete
-  add_command "debug", git.debug, cfg.FileComplete
+  add_command "init", git.init,
+    callbacks: {
+      git.update_branch_status
+      git.update_git_diff_base
+    }
+    
+  add_command "pull", git.pull,
+    callbacks: {
+      git.update_branch_status
+      git.update_git_diff_base
+    }
+    
+  add_command "push", git.push,
+    callbacks: {
+      git.update_branch_status
+      git.update_git_diff_base
+    }
+    
+  add_command "branch", git.branch,
+    callbacks: {
+      git.update_branch_status
+      git.update_git_diff_base
+    }
+    
+  add_command "fetch", git.fetch,
+    callbacks: {
+      git.update_branch_status
+      git.update_git_diff_base
+    }
+
+  add_command "checkout", git.checkout,
+    callbacks: {
+      git.update_branch_status
+      git.update_git_diff_base
+    }
+
+  add_command "stage", git.stage, 
+    completer: cfg.FileComplete
+    callbacks: {
+      git.update_branch_status
+      git.update_git_diff_base
+    }
+
+  add_command "unstage", git.unstage, 
+    completer: cfg.FileComplete
+    callbacks: {
+      git.update_branch_status
+      git.update_git_diff_base
+    }
+    
+  add_command "rm", git.rm, 
+    completer: cfg.FileComplete
+    callbacks: {
+      git.update_branch_status
+      git.update_git_diff_base
+    }
+    
+  add_command "debug", git.debug, 
+    callbacks: {
+      git.update_branch_status
+      git.update_git_diff_base
+    }
+
+  -- You would think that git.commit wants a callback, but since it opens a 
+  -- pane and creates a callback to process that pane, we just use that one
+  -- to handle additional callbacks instead
+  add_command "commit", git.commit
+  add_command "list", git.list
+  add_command "log", git.log
+  add_command "status", git.status
+  add_command "diff", git.diff
 
   generate_help!
 
@@ -1558,7 +1620,7 @@ export onQuit = =>
     if commit.pane == self
       if commit.ready
         debug "Commit #{i} is ready, fulfilling active commit ..."
-        commit.callback commit.file
+        commit.callback @Buf, commit.file
         for t, _temp in ipairs active
           if _temp == commit
             table.remove active, t
@@ -1587,7 +1649,7 @@ export onQuit = =>
               if yes
                 @Buf\Save!
                 @ForceQuit!
-                commit.callback commit.file
+                commit.callback @Buf, commit.file
                 os.Remove commit.file
               else
                 info\Message "Aborted commit (closed without saving)"

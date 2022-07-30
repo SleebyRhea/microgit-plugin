@@ -73,6 +73,23 @@ local errors = {
   no_scratch = "this cannot be run out of a temporary pane",
   need_file = "this can only be run in a file pane"
 }
+local add_callback
+add_callback = function(callback, fn)
+  if not (CALLBACKS_SET[callback]) then
+    CALLBACKS_SET[callback] = { }
+  end
+  return table.insert(CALLBACKS_SET[callback], fn)
+end
+local run_callbacks
+run_callbacks = function(callback, ...)
+  local active = { }
+  for i, fn in ipairs((CALLBACKS_SET[callback] or { })) do
+    if not (fn(...)) then
+      table.insert(active, fn)
+    end
+  end
+  CALLBACKS_SET[callback] = active
+end
 local chomp
 chomp = function(s)
   s = s:gsub("^%s*", ""):gsub("%s*$", ""):gsub("[\n\r]*$", "")
@@ -203,20 +220,28 @@ local get_path_info = (function()
   end
 end)()
 local add_command
-add_command = function(name, fn, cb)
+add_command = function(name, fn, config)
+  if config == nil then
+    config = { }
+  end
   if LOADED_COMMANDS[name] then
     return 
   end
   local external_name = "git." .. tostring(name)
+  local callbacks = config.callbacks or { }
+  local completer = config.completer or cfg.NoComplete
+  add_callback(external_name, function(...)
+    for _index_0 = 1, #callbacks do
+      local cb = callbacks[_index_0]
+      cb(...)
+    end
+    return false
+  end)
   local cmd
   cmd = function(any, extra)
-    local _path, _buf
-    if any and any.Buf then
-      _buf = any.Buf
-    else
-      _buf = any
-    end
     local _finfo
+    debug("command[" .. tostring(external_name) .. "] started")
+    local _buf = any.Buf or any
     local abs, dir, pwd
     abs, dir, name, pwd = get_path_info(_buf.Path)
     if pwd then
@@ -227,7 +252,6 @@ add_command = function(name, fn, cb)
         pwd = pwd
       }
     end
-    debug("command[" .. tostring(external_name) .. "] started")
     fn(any, _finfo, unpack((function()
       local _accum_0 = { }
       local _len_0 = 1
@@ -239,11 +263,10 @@ add_command = function(name, fn, cb)
       end
       return _accum_0
     end)()))
-    git.update_branch_status(_buf, _finfo)
-    git.update_git_diff_base(_buf, _finfo)
+    run_callbacks(external_name, _buf, _finfo)
     debug("command[" .. tostring(external_name) .. "] completed")
   end
-  cfg.MakeCommand(external_name, cmd, cb)
+  cfg.MakeCommand(external_name, cmd, completer)
   LOADED_COMMANDS[name] = {
     cmd = cmd,
     help = git[name .. "_help"]
@@ -368,23 +391,6 @@ local generate_help = (function()
     return cfg.AddRuntimeFileFromMemory(cfg.RTHelp, tostring(NAME) .. ".statusline", statusline_help)
   end
 end)()
-local add_callback
-add_callback = function(callback, fn)
-  if not (CALLBACKS_SET[callback]) then
-    CALLBACKS_SET[callback] = { }
-  end
-  return table.insert(CALLBACKS_SET[callback], fn)
-end
-local run_callbacks
-run_callbacks = function(callback, ...)
-  local active = { }
-  for i, fn in ipairs((CALLBACKS_SET["onQuit"] or { })) do
-    if not (fn(...)) then
-      table.insert(active, fn)
-    end
-  end
-  CALLBACKS_SET["onQuit"] = active
-end
 local wordify
 wordify = function(word, singular, plural)
   singular = word .. singular
@@ -1268,7 +1274,7 @@ git = (function()
         each_line(chomp(status_out), function(line)
           commit_msg_start = commit_msg_start .. "# " .. tostring(line) .. "\n"
         end)
-        make_commit_pane(self, cmd, commit_msg_start, function(file, _)
+        make_commit_pane(self, cmd, commit_msg_start, function(buffer, file, _)
           if not (file) then
             return 
           end
@@ -1295,7 +1301,9 @@ git = (function()
           if err then
             return send.commit(err)
           end
-          return send.commit(commit_out)
+          send.commit(commit_out)
+          update_branch_status(buffer, finfo)
+          return update_git_diff_base(buffer, finfo)
         end)
         debug("Awaiting commit completion within onQuit")
       end
@@ -1787,21 +1795,74 @@ init = function()
       app.TermMessage(tostring(NAME) .. ": git not present in $PATH or set, some functionality will not work correctly")
     end
   end
-  add_command("init", git.init, cfg.NoComplete)
-  add_command("pull", git.pull, cfg.NoComplete)
-  add_command("push", git.push, cfg.NoComplete)
-  add_command("list", git.list, cfg.NoComplete)
-  add_command("log", git.log, cfg.NoComplete)
-  add_command("commit", git.commit, cfg.NoComplete)
-  add_command("status", git.status, cfg.NoComplete)
-  add_command("branch", git.branch, cfg.NoComplete)
-  add_command("fetch", git.fetch, cfg.NoComplete)
-  add_command("checkout", git.checkout, cfg.NoComplete)
-  add_command("stage", git.stage, cfg.FileComplete)
-  add_command("unstage", git.unstage, cfg.FileComplete)
-  add_command("rm", git.rm, cfg.FileComplete)
-  add_command("diff", git.diff, cfg.FileComplete)
-  add_command("debug", git.debug, cfg.FileComplete)
+  add_command("init", git.init, {
+    callbacks = {
+      git.update_branch_status,
+      git.update_git_diff_base
+    }
+  })
+  add_command("pull", git.pull, {
+    callbacks = {
+      git.update_branch_status,
+      git.update_git_diff_base
+    }
+  })
+  add_command("push", git.push, {
+    callbacks = {
+      git.update_branch_status,
+      git.update_git_diff_base
+    }
+  })
+  add_command("branch", git.branch, {
+    callbacks = {
+      git.update_branch_status,
+      git.update_git_diff_base
+    }
+  })
+  add_command("fetch", git.fetch, {
+    callbacks = {
+      git.update_branch_status,
+      git.update_git_diff_base
+    }
+  })
+  add_command("checkout", git.checkout, {
+    callbacks = {
+      git.update_branch_status,
+      git.update_git_diff_base
+    }
+  })
+  add_command("stage", git.stage, {
+    completer = cfg.FileComplete,
+    callbacks = {
+      git.update_branch_status,
+      git.update_git_diff_base
+    }
+  })
+  add_command("unstage", git.unstage, {
+    completer = cfg.FileComplete,
+    callbacks = {
+      git.update_branch_status,
+      git.update_git_diff_base
+    }
+  })
+  add_command("rm", git.rm, {
+    completer = cfg.FileComplete,
+    callbacks = {
+      git.update_branch_status,
+      git.update_git_diff_base
+    }
+  })
+  add_command("debug", git.debug, {
+    callbacks = {
+      git.update_branch_status,
+      git.update_git_diff_base
+    }
+  })
+  add_command("commit", git.commit)
+  add_command("list", git.list)
+  add_command("log", git.log)
+  add_command("status", git.status)
+  add_command("diff", git.diff)
   return generate_help()
 end
 onBufPaneOpen = function(self)
@@ -1872,7 +1933,7 @@ onQuit = function(self)
     if commit.pane == self then
       if commit.ready then
         debug("Commit " .. tostring(i) .. " is ready, fulfilling active commit ...")
-        commit.callback(commit.file)
+        commit.callback(self.Buf, commit.file)
         for t, _temp in ipairs(active) do
           if _temp == commit then
             table.remove(active, t)
@@ -1905,7 +1966,7 @@ onQuit = function(self)
             if yes then
               self.Buf:Save()
               self:ForceQuit()
-              commit.callback(commit.file)
+              commit.callback(self.Buf, commit.file)
               os.Remove(commit.file)
             else
               info:Message("Aborted commit (closed without saving)")
