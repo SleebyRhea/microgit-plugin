@@ -23,8 +23,8 @@ local regexp = go.import("regexp")
 local runtime = go.import("runtime")
 local ACTIVE_UPDATES = { }
 local ACTIVE_COMMITS = { }
-local BRANCH_STATUS = { }
-local BUFFER_BRANCH = { }
+local BUFFER_REPO = { }
+local REPO_STATUS = { }
 local LOADED_COMMANDS
 if not (LOADED_COMMANDS) then
   LOADED_COMMANDS = {
@@ -603,89 +603,217 @@ git = (function()
       get_branches = get_branches
     }
   end
-  local update_branch_status
-  update_branch_status = function(self, finfo, cmd)
-    if not (truthy(cfg.GetGlobalOption(tostring(NAME) .. ".updateinfo"))) then
-      return 
-    end
-    if not ((not self.Type.Scratch) and (self.Path ~= '') and finfo) then
-      return 
-    end
-    debug("update_branch_status: Beginning update process for " .. tostring(self))
-    if not (cmd) then
-      local err
-      cmd, err = new_command(finfo.dir)
-      if not (cmd) then
-        return send.updater((err .. " (to suppress this message, set " .. tostring(NAME) .. ".updateinfo to false)"))
+  local update_branch_status = (function()
+    local re_sha_sum = regexp.MustCompile("^\\s*([0-9a-zA-Z]{40}?)\\s*$")
+    return function(self, finfo, cmd)
+      if not (truthy(cfg.GetGlobalOption(tostring(NAME) .. ".updateinfo"))) then
+        return 
       end
-    end
-    debug("update_branch_status: Getting branch label ...")
-    if not (cmd.in_repo()) then
-      return 
-    end
-    local branch, err = cmd.exec("branch", "--show-current")
-    if err then
-      return 
-    end
-    branch = chomp(branch)
-    BUFFER_BRANCH[finfo.abs] = branch
-    if not (branch) then
-      return 
-    end
-    BRANCH_STATUS[branch] = BRANCH_STATUS[branch] or {
-      name = (branch or ''),
-      ahead = "-",
-      behind = "-",
-      staged = "-",
-      commit = commit
-    }
-    if BRANCH_STATUS[branch].__updating then
-      return 
-    end
-    BRANCH_STATUS[branch].__updating = true
-    local diff_string = ''
-    local short_commit = ''
-    local count_staged = ''
-    local count_behind = 0
-    local count_ahead = 0
-    debug("update_branch_status: Generating diff finalizer fn ...")
-    local finish_update
-    finish_update = function()
-      count_staged = select(2, (chomp(count_staged)):gsub("([^%s\r\n]+)", ''))
-      BRANCH_STATUS[branch] = {
-        __updating = false,
-        staged = count_staged,
-        commit = short_commit,
-        behind = count_behind,
-        ahead = count_ahead,
-        name = branch
-      }
-    end
-    local start_get_countstaged
-    start_get_countstaged = function()
-      local a, b = (chomp(diff_string)):match("^(%d+)%s+(%d+)$")
-      count_ahead, count_behind = (a or "-"), (b or "-")
-      return cmd.exec_async_cb("diff", (function(out)
-        count_staged = count_staged .. out
-      end), (function(out)
-        count_staged = count_staged .. out
-      end), finish_update, "--name-only", "--cached")
-    end
-    local start_get_diffstring
-    start_get_diffstring = function()
-      short_commit = chomp(short_commit)
+      if not ((not self.Type.Scratch) and (self.Path ~= '') and finfo) then
+        return 
+      end
+      if not (cmd) then
+        local err
+        cmd, err = new_command(finfo.dir)
+        if not (cmd) then
+          return send.updater((err .. " (to suppress this message, set " .. tostring(NAME) .. ".updateinfo to false)"))
+        end
+      end
+      if not (cmd.in_repo()) then
+        return 
+      end
+      if BUFFER_REPO[finfo.abs] then
+        if BUFFER_REPO[finfo.abs].__updating then
+          return 
+        end
+        if BUFFER_REPO[finfo.abs].branch then
+          if REPO_STATUS[BUFFER_REPO[finfo.abs].branch] then
+            if REPO_STATUS[BUFFER_REPO[finfo.abs].branch].__updating then
+              return 
+            end
+          end
+        end
+      end
+      local branch = ''
+      local diff_string = ''
+      local short_commit = ''
+      local first_commit = ''
+      local count_staged = ''
+      local count_behind = ''
+      local count_ahead = ''
+      local first_commit_err = ''
+      local short_commit_err = ''
+      local count_staged_err = ''
+      local diff_string_err = ''
+      local branch_err = ''
+      local detached = false
+      local set_empty
+      set_empty = function(reason)
+        debug("update_branch_status: Setting empty tableset for " .. tostring(finfo.abs) .. ": " .. tostring(reason))
+        BUFFER_REPO[finfo.abs] = {
+          repoid = false,
+          branch = false
+        }
+      end
+      debug("update_branch_status: Beginning update process for " .. tostring(self))
+      local finish_update
+      finish_update = function()
+        if not (count_staged_err == '') then
+          return set_empty("error encountered getting list of staged files: " .. tostring(count_staged_err))
+        end
+        count_staged = select(2, (chomp(count_staged)):gsub("([^%s\r\n]+)", ''))
+        REPO_STATUS[first_commit][branch].staged = count_staged
+        REPO_STATUS[first_commit][branch].__updating = false
+        BUFFER_REPO[finfo.abs].__updating = false
+      end
+      local start_get_countstaged
+      start_get_countstaged = function()
+        if not (diff_string and diff_string ~= '') then
+          return set_empty("got empty diff string")
+        end
+        if not (diff_string_err == '') then
+          return set_empty("error encountered getting diff string: " .. tostring(diff_string_err))
+        end
+        local a, b = (chomp(diff_string)):match("^(%d+)%s+(%d+)$")
+        REPO_STATUS[first_commit][branch].ahead = a
+        REPO_STATUS[first_commit][branch].behind = b
+        return cmd.exec_async_cb("diff", (function(out)
+          count_staged = count_staged .. out
+        end), (function(err)
+          count_staged_err = count_staged_err .. err
+        end), finish_update, "--name-only", "--cached")
+      end
+      local start_get_diffstring
+      start_get_diffstring = function()
+        if not (short_commit and short_commit ~= '') then
+          return set_empty("got empty short commit")
+        end
+        if not (short_commit_err == '') then
+          return set_empty("error encountered getting short commit: " .. tostring(short_commit_err))
+        end
+        local revlist_str = tostring(branch) .. "..." .. tostring(branch)
+        if not (detached) then
+          revlist_str = "origin/" .. tostring(revlist_str)
+        end
+        short_commit = chomp(short_commit)
+        REPO_STATUS[first_commit][branch].commit = short_commit
+        return cmd.exec_async_cb("rev-list", (function(out)
+          diff_string = diff_string .. out
+        end), (function(err)
+          diff_string_err = diff_string_err .. err
+        end), start_get_countstaged, "--left-right", "--count", revlist_str)
+      end
+      local start_get_detached
+      start_get_detached = function()
+        if not (branch and branch ~= '') then
+          return set_empty("got empty branch list")
+        end
+        if not (branch_err == '') then
+          return set_empty("error encountered getting branch: " .. tostring(branch_err))
+        end
+        local commit
+        if not (each_line(chomp(branch), function(line, i, len, final)
+          local _hash = line:match('^%s*%*%s*%(%s*HEAD%s+detached%s+at%s+([0-9A-Za-z]+)%s*%)%s*$')
+          if _hash then
+            commit = _hash
+            return final(true)
+          end
+        end)) then
+          return set_empty("failed to parse state:")
+        end
+        local err
+        branch, err = cmd.exec("rev-parse", commit)
+        if err or not branch then
+          return set_empty("could not match detached HEAD to a revision: " .. tostring(err))
+        end
+        branch = chomp(branch)
+        if not (REPO_STATUS[first_commit][branch]) then
+          REPO_STATUS[first_commit][branch] = {
+            name = branch
+          }
+        end
+        if not (BUFFER_REPO[finfo.abs]) then
+          BUFFER_REPO[finfo.abs] = { }
+        end
+        BUFFER_REPO[finfo.abs].repoid = first_commit
+        BUFFER_REPO[finfo.abs].branch = branch
+        BUFFER_REPO[finfo.abs].display = "HEAD:" .. tostring(commit)
+        return cmd.exec_async_cb("rev-parse", (function(out)
+          short_commit = short_commit .. out
+        end), (function(err)
+          short_commit_err = short_commit_err .. err
+        end), start_get_diffstring, "--short", branch)
+      end
+      local start_get_commit
+      start_get_commit = function()
+        if not (branch and branch ~= '') then
+          branch = ''
+          branch_err = ''
+          detached = true
+          return cmd.exec_async_cb("branch", (function(out)
+            branch = branch .. out
+          end), (function(err)
+            branch_err = branch_err .. err
+          end), start_get_detached, "--contains", "HEAD")
+        end
+        if not (branch_err == '') then
+          return set_empty("error encountered getting branch: " .. tostring(branch_err))
+        end
+        branch = chomp(branch)
+        if not (REPO_STATUS[first_commit][branch]) then
+          REPO_STATUS[first_commit][branch] = {
+            name = branch
+          }
+        end
+        if not (BUFFER_REPO[finfo.abs]) then
+          BUFFER_REPO[finfo.abs] = { }
+        end
+        BUFFER_REPO[finfo.abs].repoid = first_commit
+        BUFFER_REPO[finfo.abs].branch = branch
+        return cmd.exec_async_cb("rev-parse", (function(out)
+          short_commit = short_commit .. out
+        end), (function(err)
+          short_commit_err = short_commit_err .. err
+        end), start_get_diffstring, "--short", branch)
+      end
+      local start_get_branch
+      start_get_branch = function()
+        if not (first_commit and first_commit ~= '') then
+          return set_empty("got empty first commit")
+        end
+        if not (first_commit_err == '') then
+          return set_empty("error encountered getting first revision: " .. tostring(first_commit_err))
+        end
+        if not (each_line(chomp(first_commit), function(line, i, len, final)
+          local _hash = re_sha_sum:FindString(line)
+          if not (_hash and _hash ~= '') then
+            return final(false)
+          end
+          first_commit = _hash
+          return final(true)
+        end)) then
+          return set_empty("failed to parse first commit")
+        end
+        if not (REPO_STATUS[first_commit]) then
+          REPO_STATUS[first_commit] = { }
+        end
+        if not (BUFFER_REPO[finfo.abs]) then
+          BUFFER_REPO[finfo.abs] = { }
+        end
+        BUFFER_REPO[finfo.abs].identifier = first_commit
+        return cmd.exec_async_cb("branch", (function(out)
+          branch = branch .. out
+        end), (function(err)
+          branch_err = branch_err .. err
+        end), start_get_commit, "--show-current")
+      end
       return cmd.exec_async_cb("rev-list", (function(out)
-        diff_string = diff_string .. out
-      end), (function(out)
-        diff_string = diff_string .. out
-      end), start_get_countstaged, "--left-right", "--count", ("origin/" .. tostring(branch) .. "..." .. tostring(branch)))
+        first_commit = first_commit .. out
+      end), (function(err)
+        first_commit_err = first_commit_err .. err
+      end), start_get_branch, "--parents", "HEAD", "--reverse")
     end
-    return cmd.exec_async_cb("rev-parse", (function(out)
-      short_commit = short_commit .. out
-    end), (function(out)
-      short_commit = short_commit .. out
-    end), start_get_diffstring, "--short", branch)
-  end
+  end)()
   local suppress = " (to suppress this message, set " .. tostring(NAME) .. ".gitgutter to false)"
   local update_git_diff_base
   update_git_diff_base = function(self, finfo, cmd)
@@ -760,7 +888,7 @@ git = (function()
     init_help = [[      Usage: %pub%.init
         Initialize a repository in the current panes directory
     ]],
-    diff = function(self, finfo)
+    diff = function(self, finfo, ...)
       if is_scratch(self.Buf) then
         return send.init(errors.no_scratch)
       end
@@ -771,10 +899,32 @@ git = (function()
       if not (cmd.in_repo()) then
         return send.diff(errors.not_a_repo)
       end
-      local repo_relative_path = str.TrimPrefix(finfo.abs, finfo.pwd)
-      local repo_relative_file = str.TrimPrefix(self.Buf.Path, repo_relative_path)
+      local diff_all, diff_staged = false, false
+      local diff_args = { }
+      if ... then
+        local _list_0 = {
+          ...
+        }
+        for _index_0 = 1, #_list_0 do
+          local a = _list_0[_index_0]
+          local _exp_0 = a
+          if '--all' == _exp_0 or '-a' == _exp_0 then
+            diff_all = true
+          elseif '--staged' == _exp_0 or '-s' == _exp_0 then
+            diff_staged = true
+          end
+        end
+      end
+      if diff_staged then
+        table.insert(diff_args, "--cached")
+      end
+      if not diff_all then
+        local repo_relative_path = str.TrimPrefix(finfo.abs, finfo.pwd)
+        local repo_relative_file = str.TrimPrefix(self.Buf.Path, repo_relative_path)
+        table.insert(diff_args, repo_relative_file)
+      end
       local out
-      out, err = cmd.exec("diff", repo_relative_file)
+      out, err = cmd.exec("diff", unpack(diff_args))
       if err then
         return send.diff(err)
       end
@@ -782,6 +932,10 @@ git = (function()
     end,
     diff_help = [[      Usage: %pub%.diff
         Git diff HEAD for the current file
+
+      Options:
+        -s --staged   Include staged files
+        -a --all       Diff entire repository
     ]],
     fetch = function(self, finfo)
       if is_scratch(self.Buf) then
@@ -1099,7 +1253,7 @@ git = (function()
             return send.stage(err)
           end
           if not (path_exists(file)) then
-            return send.stage(errors.invalid_arg .. "(file " .. tostring(file) .. " doesn't exist)")
+            return send.stage(errors.invalid_arg .. ", file " .. tostring(file) .. " doesn't exist")
           end
           table.insert(files, file)
           _continue_0 = true
@@ -1223,6 +1377,49 @@ git = (function()
     end,
     rm_help = [[      Usage: %pub%.rm [<file1>, <file2>, ...]
         Stage the removal of a file (or files) from the git repo.
+    ]],
+    debug = function(self, finfo, ...)
+      local debug_output = ''
+      local cmd, err = new_command(finfo.dir)
+      if not (cmd) then
+        return send.debug(err)
+      end
+      local _, branch = cmd.get_branches()
+      debug_output = debug_output .. "File: " .. tostring(finfo.abs) .. "\n"
+      debug_output = debug_output .. "Name: " .. tostring(finfo.name) .. "\n"
+      debug_output = debug_output .. "PWD: " .. tostring(finfo.pwd) .. "\n"
+      debug_output = debug_output .. "Directory: " .. tostring(finfo.dir) .. "\n"
+      debug_output = debug_output .. "Absolute Path: " .. tostring(finfo.abs) .. "\n"
+      debug_output = debug_output .. "In Repo: " .. tostring(cmd.in_repo()) .. "\n"
+      debug_output = debug_output .. "Branch: " .. tostring(branch) .. "\n"
+      debug_output = debug_output .. "\n"
+      debug_output = debug_output .. "_G:ACTIVE_UPDATES\n"
+      for k, v in pairs(ACTIVE_UPDATES) do
+        debug_output = debug_output .. "  Updating Diff: " .. tostring(k) .. ": " .. tostring(v) .. "\n"
+      end
+      debug_output = debug_output .. "_G:ACTIVE_COMMITS\n"
+      for k, v in pairs(ACTIVE_COMMITS) do
+        debug_output = debug_output .. "  Active Commits: " .. tostring(k) .. ": " .. tostring(v) .. "\n"
+      end
+      debug_output = debug_output .. "_G:BUFFER_REPO\n"
+      for k, v in pairs(BUFFER_REPO) do
+        debug_output = debug_output .. "  File: " .. tostring(k) .. "\n"
+        debug_output = debug_output .. "    " .. tostring(v.repoid) .. "\n"
+        debug_output = debug_output .. "    " .. tostring(v.branch) .. "\n"
+      end
+      debug_output = debug_output .. "_G:REPO_STATUS\n"
+      for k, v in pairs(REPO_STATUS) do
+        debug_output = debug_output .. "  Repo: " .. tostring(k) .. "\n"
+        for b, data in pairs(REPO_STATUS[k]) do
+          debug_output = debug_output .. "    Branch: " .. tostring(b) .. "\n"
+          debug_output = debug_output .. "      a:" .. tostring(data.ahead) .. ", b:" .. tostring(data.behind) .. ", "
+          debug_output = debug_output .. "c:" .. tostring(data.commit) .. ", s:" .. tostring(data.staged) .. "\n"
+        end
+      end
+      return send.debug(debug_output)
+    end,
+    debug_help = [[      Usage: %pub%.debug
+        Dumps plugin operational data for easy viewing
     ]]
   }
 end)()
@@ -1230,63 +1427,102 @@ numahead = function(self)
   if not (self.Path and self.Path ~= '') then
     return "-"
   end
-  local abs = get_path_info(self.Path)
-  if not (BUFFER_BRANCH[abs]) then
+  local repoid, branch, abs
+  abs = get_path_info(self.Path)
+  if not (BUFFER_REPO[abs]) then
     return "-"
   end
-  if not (BRANCH_STATUS[BUFFER_BRANCH[abs]]) then
+  repoid = BUFFER_REPO[abs].repoid
+  branch = BUFFER_REPO[abs].branch
+  if not (repoid and branch) then
     return "-"
   end
-  return tostring(BRANCH_STATUS[BUFFER_BRANCH[abs]].ahead)
+  if not (REPO_STATUS[repoid]) then
+    return "-"
+  end
+  if not (REPO_STATUS[repoid][branch]) then
+    return "-"
+  end
+  return tostring(REPO_STATUS[repoid][branch].ahead)
 end
 numbehind = function(self)
   if not (self.Path and self.Path ~= '') then
     return "-"
   end
-  local abs = get_path_info(self.Path)
-  if not (BUFFER_BRANCH[abs]) then
+  local repoid, branch, abs
+  abs = get_path_info(self.Path)
+  if not (BUFFER_REPO[abs]) then
     return "-"
   end
-  if not (BRANCH_STATUS[BUFFER_BRANCH[abs]]) then
+  repoid = BUFFER_REPO[abs].repoid
+  branch = BUFFER_REPO[abs].branch
+  if not (repoid and branch) then
     return "-"
   end
-  return tostring(BRANCH_STATUS[BUFFER_BRANCH[abs]].behind)
+  if not (REPO_STATUS[repoid]) then
+    return "-"
+  end
+  if not (REPO_STATUS[repoid][branch]) then
+    return "-"
+  end
+  return tostring(REPO_STATUS[repoid][branch].behind)
 end
 numstaged = function(self)
   if not (self.Path and self.Path ~= '') then
     return "-"
   end
-  local abs = get_path_info(self.Path)
-  if not (BUFFER_BRANCH[abs]) then
+  local repoid, branch, abs
+  abs = get_path_info(self.Path)
+  if not (BUFFER_REPO[abs]) then
     return "-"
   end
-  if not (BRANCH_STATUS[BUFFER_BRANCH[abs]]) then
+  repoid = BUFFER_REPO[abs].repoid
+  branch = BUFFER_REPO[abs].branch
+  if not (repoid and branch) then
     return "-"
   end
-  return tostring(BRANCH_STATUS[BUFFER_BRANCH[abs]].staged)
+  if not (REPO_STATUS[repoid]) then
+    return "-"
+  end
+  if not (REPO_STATUS[repoid][branch]) then
+    return "-"
+  end
+  return tostring(REPO_STATUS[repoid][branch].staged)
 end
 oncommit = function(self)
   if not (self.Path and self.Path ~= '') then
     return "-"
   end
-  local abs = get_path_info(self.Path)
-  if not (BUFFER_BRANCH[abs]) then
+  local repoid, branch, abs
+  abs = get_path_info(self.Path)
+  if not (BUFFER_REPO[abs]) then
     return "-"
   end
-  if not (BRANCH_STATUS[BUFFER_BRANCH[abs]]) then
+  repoid = BUFFER_REPO[abs].repoid
+  branch = BUFFER_REPO[abs].branch
+  if not (repoid and branch) then
     return "-"
   end
-  return tostring(BRANCH_STATUS[BUFFER_BRANCH[abs]].commit)
+  if not (REPO_STATUS[repoid]) then
+    return "-"
+  end
+  if not (REPO_STATUS[repoid][branch]) then
+    return "-"
+  end
+  return tostring(REPO_STATUS[repoid][branch].commit)
 end
 onbranch = function(self)
   if not (self.Path and self.Path ~= '') then
     return "-"
   end
-  local abs = get_path_info(self.Path)
-  if not (BUFFER_BRANCH[abs]) then
+  local repoid, branch, abs
+  abs = get_path_info(self.Path)
+  if not (BUFFER_REPO[abs]) then
     return "-"
   end
-  return tostring(BUFFER_BRANCH[abs] or "")
+  repoid = BUFFER_REPO[abs].repoid
+  branch = BUFFER_REPO[abs].branch
+  return tostring(BUFFER_REPO[abs].display or branch or "none")
 end
 preinit = function()
   add_config("command", "", [[    The absolute path to the command to use for git operations (type: string) 
@@ -1394,8 +1630,8 @@ onQuit = function(self)
   if self.Path and self.Path ~= '' then
     local _, abs
     _, abs, _ = get_path_info(self.Path)
-    if BUFFER_BRANCH[abs] then
-      BUFFER_BRANCH[abs] = nil
+    if BUFFER_REPO[abs] then
+      BUFFER_REPO[abs] = nil
     end
   end
   if not (#ACTIVE_COMMITS > 0) then
