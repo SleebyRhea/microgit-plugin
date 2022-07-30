@@ -800,7 +800,7 @@ git = (function()
         if not (BUFFER_REPO[finfo.abs]) then
           BUFFER_REPO[finfo.abs] = { }
         end
-        BUFFER_REPO[finfo.abs].identifier = first_commit
+        BUFFER_REPO[finfo.abs].repoid = first_commit
         return cmd.exec_async_cb("branch", (function(out)
           branch = branch .. out
         end), (function(err)

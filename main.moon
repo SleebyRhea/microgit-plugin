@@ -715,7 +715,7 @@ git = (->
         unless BUFFER_REPO[finfo.abs]
           BUFFER_REPO[finfo.abs] = {}
 
-        BUFFER_REPO[finfo.abs].identifier = first_commit
+        BUFFER_REPO[finfo.abs].repoid = first_commit
 
         cmd.exec_async_cb "branch",
           ((out) -> branch ..= out),
