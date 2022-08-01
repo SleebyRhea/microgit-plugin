@@ -546,7 +546,7 @@ git = (function()
       if not (path_exists(base)) then
         return nil, err.Error()
       end
-      local out = shl.ExecCommand(base, "-C", directory, command, ...)
+      local out = shl.ExecCommand(base, "-P", "-C", directory, command, ...)
       return out
     end
     local exec_async
@@ -587,11 +587,15 @@ git = (function()
       table.insert(args, 1, cmd)
       table.insert(args, 1, directory)
       table.insert(args, 1, "-C")
+      table.insert(args, 1, "-P")
       shl.JobSpawn(base, args, on_emit, on_emit, on_exit)
       return "", nil
     end
     local exec_async_cb
-    exec_async_cb = function(cmd, on_stdout, on_stderr, on_exit, ...)
+    exec_async_cb = function(cmd, cb_args, on_stdout, on_stderr, on_exit, ...)
+      if cb_args == nil then
+        cb_args = { }
+      end
       if not (path_exists(directory)) then
         return nil, "directory " .. tostring(directory) .. " does not exist"
       end
@@ -609,17 +613,19 @@ git = (function()
       if not (path_exists(base)) then
         return nil, err.Error()
       end
-      on_stdout = assert(on_stdout, "exec_async_cb requires an on_stdout callback")
-      on_stderr = assert(on_stderr, "exec_async_cb requires an on_stderr callback")
-      on_exit = assert(on_exit, "exec_async_cb requires an on_exit callback")
+      debug("e_a_cb: " .. tostring(cmd) .. ", " .. tostring(type(cb_args)) .. ", " .. tostring(type(on_stdout)) .. ", " .. tostring(type(on_stderr)) .. ", " .. tostring(type(on_exit)))
+      on_stdout = assert(on_stdout, tostring(cmd) .. ": exec_async_cb requires an on_stdout callback")
+      on_stderr = assert(on_stderr, tostring(cmd) .. ": exec_async_cb requires an on_stderr callback")
+      on_exit = assert(on_exit, tostring(cmd) .. ": exec_async_cb requires an on_exit callback")
       local args = {
         ...
       }
       table.insert(args, 1, cmd)
       table.insert(args, 1, directory)
       table.insert(args, 1, "-C")
+      table.insert(args, 1, "-P")
       debug("Launching: " .. tostring(base) .. " " .. tostring(str.Join(args, " ")))
-      shl.JobSpawn(base, args, on_stdout, on_stderr, on_exit)
+      shl.JobSpawn(base, args, on_stdout, on_stderr, on_exit, unpack(cb_args))
     end
     local in_repo
     in_repo = function()
@@ -693,6 +699,7 @@ git = (function()
     }
   end
   local update_branch_status = (function()
+    local ref_data_fmt = "--format=%(HEAD);%(refname:short);%(objectname:short);%(upstream:short)"
     local re_sha_sum = regexp.MustCompile("^\\s*([0-9a-zA-Z]{40}?)\\s*$")
     return function(self, finfo, cmd)
       GITLINE_ACTIVE = truthy(cfg.GetGlobalOption(tostring(NAME) .. ".updateinfo"))
@@ -724,19 +731,9 @@ git = (function()
           end
         end
       end
-      local branch = ''
-      local diff_string = ''
-      local short_commit = ''
-      local first_commit = ''
-      local count_staged = ''
-      local count_behind = ''
-      local count_ahead = ''
-      local first_commit_err = ''
-      local short_commit_err = ''
-      local count_staged_err = ''
-      local diff_string_err = ''
-      local branch_err = ''
-      local detached = false
+      local start_chain, parse_repo_root, parse_initial_commit
+      local parse_ref_data, parse_detached_head, start_get_countstaged
+      local parse_diff_string, finish_chain
       local set_empty
       set_empty = function(reason)
         debug("update_branch_status: Setting empty tableset for " .. tostring(finfo.abs) .. ": " .. tostring(reason))
@@ -745,164 +742,192 @@ git = (function()
           branch = false
         }
       end
-      debug("update_branch_status: Beginning update process for " .. tostring(self))
-      local finish_update
-      finish_update = function()
-        if not (count_staged_err == '') then
-          return set_empty("error encountered getting list of staged files: " .. tostring(count_staged_err))
-        end
-        count_staged = select(2, (chomp(count_staged)):gsub("([^%s\r\n]+)", ''))
-        REPO_STATUS[first_commit][branch].staged = count_staged
-        REPO_STATUS[first_commit][branch].__updating = false
-        BUFFER_REPO[finfo.abs].__updating = false
-      end
-      local start_get_countstaged
-      start_get_countstaged = function()
-        if not (diff_string_err == '') then
-          return set_empty("error encountered getting diff string: " .. tostring(diff_string_err))
-        end
-        local a, b = 0, 0
-        if not (diff_string and diff_string ~= '') then
-          local originless = false
-          a, b = (chomp(diff_string)):match("^(%d+)%s+(%d+)$")
-        end
-        REPO_STATUS[first_commit][branch].ahead = a
-        REPO_STATUS[first_commit][branch].behind = b
-        return cmd.exec_async_cb("diff", (function(out)
-          count_staged = count_staged .. out
+      local repoid = ''
+      local branch = ''
+      local repo_root = ''
+      local repo_root_err = ''
+      start_chain = function()
+        debug("update_branch_status: Beginning update process for " .. tostring(self))
+        return cmd.exec_async_cb("rev-parse", nil, (function(out)
+          repo_root = repo_root .. out
         end), (function(err)
-          count_staged_err = count_staged_err .. err
-        end), finish_update, "--name-only", "--cached")
+          repo_root_err = repo_root_err .. err
+        end), parse_repo_root, "--top-level")
       end
-      local start_get_diffstring
-      start_get_diffstring = function()
-        if not (short_commit and short_commit ~= '') then
-          return set_empty("got empty short commit")
+      local first_commit = ''
+      local first_commit_err = ''
+      parse_repo_root = function()
+        if not (repo_root_err == '') then
+          return set_empty("error encountered getting repository root: " .. tostring(repo_root_err))
         end
-        if not (short_commit_err == '') then
-          return set_empty("error encountered getting short commit: " .. tostring(short_commit_err))
+        if not (repo_root) then
+          return set_empty("got nil repository root")
         end
-        local revlist_str = tostring(branch) .. "..." .. tostring(branch)
-        if not (detached) then
-          revlist_str = "origin/" .. tostring(revlist_str)
+        repo_root = chomp(repo_root)
+        if repo_root == '' then
+          return set_empty("got empty repository root")
         end
-        short_commit = chomp(short_commit)
-        REPO_STATUS[first_commit][branch].commit = short_commit
-        return cmd.exec_async_cb("rev-list", (function(out)
-          diff_string = diff_string .. out
+        return cmd.exec_async_cb("rev-list", nil, (function(out)
+          first_commit = first_commit .. out
         end), (function(err)
-          diff_string_err = diff_string_err .. err
-        end), start_get_countstaged, "--left-right", "--count", revlist_str)
+          first_commit_err = first_commit_err .. err
+        end), parse_initial_commit, "--parents", "HEAD", "--reverse")
       end
-      local start_get_detached
-      start_get_detached = function()
-        if not (branch and branch ~= '') then
-          return set_empty("got empty branch list")
-        end
-        if not (branch_err == '') then
-          return set_empty("error encountered getting branch: " .. tostring(branch_err))
-        end
-        local commit
-        if not (each_line(chomp(branch), function(line, i, len, final)
-          local _hash = line:match('^%s*%*%s*%(%s*HEAD%s+detached%s+at%s+([0-9A-Za-z]+)%s*%)%s*$')
-          if _hash then
-            commit = _hash
-            return final(true)
-          end
-        end)) then
-          return set_empty("failed to parse state:")
-        end
-        local err
-        branch, err = cmd.exec("rev-parse", commit)
-        if err or not branch then
-          return set_empty("could not match detached HEAD to a revision: " .. tostring(err))
-        end
-        branch = chomp(branch)
-        if not (REPO_STATUS[first_commit][branch]) then
-          REPO_STATUS[first_commit][branch] = {
-            name = branch
-          }
-        end
-        if not (BUFFER_REPO[finfo.abs]) then
-          BUFFER_REPO[finfo.abs] = { }
-        end
-        BUFFER_REPO[finfo.abs].repoid = first_commit
-        BUFFER_REPO[finfo.abs].branch = branch
-        BUFFER_REPO[finfo.abs].display = "HEAD:" .. tostring(commit)
-        return cmd.exec_async_cb("rev-parse", (function(out)
-          short_commit = short_commit .. out
-        end), (function(err)
-          short_commit_err = short_commit_err .. err
-        end), start_get_diffstring, "--short", branch)
-      end
-      local start_get_commit
-      start_get_commit = function()
-        if not (branch and branch ~= '') then
-          branch = ''
-          branch_err = ''
-          detached = true
-          return cmd.exec_async_cb("branch", (function(out)
-            branch = branch .. out
-          end), (function(err)
-            branch_err = branch_err .. err
-          end), start_get_detached, "--contains", "HEAD")
-        end
-        if not (branch_err == '') then
-          return set_empty("error encountered getting branch: " .. tostring(branch_err))
-        end
-        branch = chomp(branch)
-        if not (REPO_STATUS[first_commit][branch]) then
-          REPO_STATUS[first_commit][branch] = {
-            name = branch
-          }
-        end
-        if not (BUFFER_REPO[finfo.abs]) then
-          BUFFER_REPO[finfo.abs] = { }
-        end
-        BUFFER_REPO[finfo.abs].repoid = first_commit
-        BUFFER_REPO[finfo.abs].branch = branch
-        return cmd.exec_async_cb("rev-parse", (function(out)
-          short_commit = short_commit .. out
-        end), (function(err)
-          short_commit_err = short_commit_err .. err
-        end), start_get_diffstring, "--short", branch)
-      end
-      local start_get_branch
-      start_get_branch = function()
-        if not (first_commit and first_commit ~= '') then
-          return set_empty("got empty first commit")
-        end
+      local ref_data = ''
+      local ref_data_err = ''
+      parse_initial_commit = function()
         if not (first_commit_err == '') then
           return set_empty("error encountered getting first revision: " .. tostring(first_commit_err))
         end
-        if not (each_line(chomp(first_commit), function(line, i, len, final)
+        if not (first_commit and first_commit ~= '') then
+          return set_empty("got empty initial commit")
+        end
+        local ok = each_line(chomp(first_commit), function(line, i, len, final)
           local _hash = re_sha_sum:FindString(line)
           if not (_hash and _hash ~= '') then
             return final(false)
           end
           first_commit = _hash
           return final(true)
-        end)) then
-          return set_empty("failed to parse first commit")
+        end)
+        if not (ok) then
+          return set_empty("failed to parse initial commit")
         end
-        if not (REPO_STATUS[first_commit]) then
-          REPO_STATUS[first_commit] = { }
+        repoid = tostring(first_commit) .. ":" .. tostring(repo_root)
+        if not (REPO_STATUS[repoid]) then
+          REPO_STATUS[repoid] = { }
         end
         if not (BUFFER_REPO[finfo.abs]) then
           BUFFER_REPO[finfo.abs] = { }
         end
-        BUFFER_REPO[finfo.abs].repoid = first_commit
-        return cmd.exec_async_cb("branch", (function(out)
-          branch = branch .. out
+        BUFFER_REPO[finfo.abs].repoid = repoid
+        return cmd.exec_async_cb("for-each-ref", nil, (function(out)
+          ref_data = ref_data .. out
         end), (function(err)
-          branch_err = branch_err .. err
-        end), start_get_commit, "--show-current")
+          ref_data_err = ref_data_err .. err
+        end), parse_ref_data, ref_data_fmt, "refs/heads")
       end
-      return cmd.exec_async_cb("rev-list", (function(out)
-        first_commit = first_commit .. out
-      end), (function(err)
-        first_commit_err = first_commit_err .. err
-      end), start_get_branch, "--parents", "HEAD", "--reverse")
+      local head_data = ''
+      local diff_string = ''
+      local head_data_err = ''
+      local diff_string_err = ''
+      parse_ref_data = function()
+        if not (ref_data_err == '') then
+          return set_empty("error encountered getting branch: " .. tostring(ref_data_err))
+        end
+        if not (ref_data and ref_data ~= '') then
+          return set_empty("repository has no branches setup (got empty)")
+        end
+        local get_detached
+        get_detached = function()
+          branch = ''
+          local branch_err = ''
+          return cmd.exec_async_cb("branch", nil, (function(out)
+            head_data = head_data .. out
+          end), (function(err)
+            head_data_err = head_data_err .. err
+          end), parse_detached_head, "--contains", "HEAD")
+        end
+        local origin, branch, commit
+        local dbg_msg = "failed to parse ref data: '" .. tostring(ref_data) .. "'. Checking for detached HEAD"
+        if not (each_line(ref_data, function(line, i, c, final)
+          debug("Line: " .. tostring(line) .. ", " .. tostring(string.sub(line, 1, 1)))
+          if not (string.sub(line, 1, 1) == "*") then
+            return 
+          end
+          branch, commit, origin = line:match("^%*;([^;]+);([^;]+);([^;]*)$")
+          debug("Got: " .. tostring(branch) .. ", " .. tostring(origin) .. ", " .. tostring(commit))
+          if origin and origin ~= '' then
+            return final(true)
+          end
+          debug(dbg_msg)
+          return final()
+        end)) then
+          return get_detached()
+        end
+        if not (REPO_STATUS[repoid][branch]) then
+          REPO_STATUS[repoid][branch] = { }
+        end
+        local branch_tbl = REPO_STATUS[repoid][branch]
+        local bufinf_tbl = BUFFER_REPO[finfo.abs]
+        branch_tbl.name = branch
+        branch_tbl.commit = commit
+        branch_tbl.display = branch
+        bufinf_tbl.repoid = repoid
+        bufinf_tbl.branch = branch
+        bufinf_tbl.branch_ptr = branch_tbl
+        return cmd.exec_async_cb("rev-list", nil, (function(out)
+          diff_string = diff_string .. out
+        end), (function(err)
+          diff_string_err = diff_string_err .. err
+        end), parse_diff_string, "--left-right", "--count", tostring(origin) .. "..." .. tostring(branch))
+      end
+      parse_detached_head = function()
+        local n = 'parse_detached_head'
+        if not (head_data and head_data ~= '') then
+          return set_empty(tostring(n) .. ": got empty branch list")
+        end
+        if not (head_data_err == '') then
+          return set_empty(tostring(n) .. ": error encountered getting branch: " .. tostring(head_data))
+        end
+        local commit
+        if not (each_line(chomp(head_data), function(line, i, len, final)
+          local _hash = line:match('^%s*%*%s*%(%s*HEAD%s+detached%s+at%s+([0-9A-Za-z]+)%s*%)%s*$')
+          if _hash then
+            commit = _hash
+            return final(true)
+          end
+        end)) then
+          return set_empty("failed to parse state: " .. tostring(head_data))
+        end
+        if not (REPO_STATUS[repoid][commit]) then
+          REPO_STATUS[repoid][commit] = { }
+        end
+        local branch_tbl = REPO_STATUS[repoid][commit]
+        local bufinf_tbl = BUFFER_REPO[finfo.abs]
+        branch_tbl.name = commit
+        branch_tbl.commit = commit
+        branch_tbl.display = "(detached HEAD)"
+        bufinf_tbl.repoid = repoid
+        bufinf_tbl.branch = commit
+        bufinf_tbl.branch_ptr = branch_tbl
+        return cmd.exec_async_cb("rev-list", nil, (function(out)
+          diff_string = diff_string .. out
+        end), (function(err)
+          diff_string_err = diff_string_err .. err
+        end), parse_diff_string, "--left-right", "--count", tostring(commit) .. "..." .. tostring(commit))
+      end
+      local count_staged = ''
+      local count_staged_err = ''
+      parse_diff_string = function()
+        if not (diff_string_err == '') then
+          return set_empty("error encountered getting diff string: " .. tostring(diff_string_err))
+        end
+        local a, b = 0, 0
+        if not (diff_string and diff_string ~= '') then
+          a, b = (chomp(diff_string)):match("^(%d+)%s+(%d+)$")
+        end
+        local branch_tbl = BUFFER_REPO[finfo.abs].branch_ptr
+        branch_tbl.ahead = a
+        branch_tbl.behind = b
+        return cmd.exec_async_cb("diff", nil, (function(out)
+          count_staged = count_staged .. out
+        end), (function(err)
+          count_staged_err = count_staged_err .. err
+        end), finish_chain, "--name-only", "--cached")
+      end
+      finish_chain = function()
+        if not (count_staged_err == '') then
+          return set_empty("error encountered getting list of staged files: " .. tostring(count_staged_err))
+        end
+        local staged = select(2, (chomp(count_staged)):gsub("([^%s\r\n]+)", ''))
+        local branch_tbl = BUFFER_REPO[finfo.abs].branch_ptr
+        branch_tbl.staged = staged
+        branch_tbl.__updating = false
+        BUFFER_REPO[finfo.abs].__updating = false
+        GITLINE_ACTIVE = true
+      end
+      return start_chain()
     end
   end)()
   local suppress = " (to suppress this message, set " .. tostring(NAME) .. ".gitgutter to false)"
@@ -943,13 +968,13 @@ git = (function()
     local start_get_diffbase
     start_get_diffbase = function()
       repo_relative_path = str.TrimPrefix(finfo.abs, chomp(top_level))
-      return cmd.exec_async_cb("show", (function(out)
+      return cmd.exec_async_cb("show", nil, (function(out)
         diff_base = diff_base .. out
       end), (function(out)
         diff_base = diff_base .. out
       end), start_set_diffbase, ":./" .. tostring(repo_relative_path))
     end
-    return cmd.exec_async_cb("rev-parse", (function(out)
+    return cmd.exec_async_cb("rev-parse", nil, (function(out)
       top_level = top_level .. out
     end), (function(out)
       top_level = top_level .. out
@@ -1632,117 +1657,51 @@ numahead = function(self)
   if not (GITLINE_ACTIVE) then
     return "-"
   end
-  local repoid, branch, abs
-  abs = get_path_info(self.Path)
-  if not (abs) then
+  local abs = get_path_info(self.Path)
+  if not (abs and BUFFER_REPO[abs] and BUFFER_REPO[abs].branch_ptr) then
     return "-"
   end
-  if not (BUFFER_REPO[abs]) then
-    return "-"
-  end
-  if not (BUFFER_REPO[abs]) then
-    return "-"
-  end
-  repoid = BUFFER_REPO[abs].repoid
-  branch = BUFFER_REPO[abs].branch
-  if not (repoid and branch) then
-    return "-"
-  end
-  if not (REPO_STATUS[repoid]) then
-    return "-"
-  end
-  if not (REPO_STATUS[repoid][branch]) then
-    return "-"
-  end
-  return tostring(REPO_STATUS[repoid][branch].ahead)
+  return tostring(BUFFER_REPO[abs].branch_ptr.ahead or "-")
 end
 numbehind = function(self)
   if not (GITLINE_ACTIVE) then
     return "-"
   end
-  local repoid, branch, abs
-  abs = get_path_info(self.Path)
-  if not (abs) then
+  local abs = get_path_info(self.Path)
+  if not (abs and BUFFER_REPO[abs] and BUFFER_REPO[abs].branch_ptr) then
     return "-"
   end
-  if not (BUFFER_REPO[abs]) then
-    return "-"
-  end
-  repoid = BUFFER_REPO[abs].repoid
-  branch = BUFFER_REPO[abs].branch
-  if not (repoid and branch) then
-    return "-"
-  end
-  if not (REPO_STATUS[repoid]) then
-    return "-"
-  end
-  if not (REPO_STATUS[repoid][branch]) then
-    return "-"
-  end
-  return tostring(REPO_STATUS[repoid][branch].behind)
+  return tostring(BUFFER_REPO[abs].branch_ptr.behind or "-")
 end
 numstaged = function(self)
   if not (GITLINE_ACTIVE) then
     return "-"
   end
-  local repoid, branch, abs
-  abs = get_path_info(self.Path)
-  if not (abs) then
+  local abs = get_path_info(self.Path)
+  if not (abs and BUFFER_REPO[abs] and BUFFER_REPO[abs].branch_ptr) then
     return "-"
   end
-  if not (BUFFER_REPO[abs]) then
-    return "-"
-  end
-  repoid = BUFFER_REPO[abs].repoid
-  branch = BUFFER_REPO[abs].branch
-  if not (repoid and branch) then
-    return "-"
-  end
-  if not (REPO_STATUS[repoid]) then
-    return "-"
-  end
-  if not (REPO_STATUS[repoid][branch]) then
-    return "-"
-  end
-  return tostring(REPO_STATUS[repoid][branch].staged)
+  return tostring(BUFFER_REPO[abs].branch_ptr.staged or "-")
 end
 oncommit = function(self)
   if not (GITLINE_ACTIVE) then
     return "-"
   end
-  local repoid, branch, abs
-  abs = get_path_info(self.Path)
-  if not (abs) then
+  local abs = get_path_info(self.Path)
+  if not (abs and BUFFER_REPO[abs] and BUFFER_REPO[abs].branch_ptr) then
     return "-"
   end
-  if not (BUFFER_REPO[abs]) then
-    return "-"
-  end
-  repoid = BUFFER_REPO[abs].repoid
-  branch = BUFFER_REPO[abs].branch
-  if not (repoid and branch) then
-    return "-"
-  end
-  if not (REPO_STATUS[repoid]) then
-    return "-"
-  end
-  if not (REPO_STATUS[repoid][branch]) then
-    return "-"
-  end
-  return tostring(REPO_STATUS[repoid][branch].commit)
+  return tostring(BUFFER_REPO[abs].branch_ptr.commit or "-")
 end
 onbranch = function(self)
-  local repoid, branch, abs
-  abs = get_path_info(self.Path)
-  if not (abs) then
+  if not (GITLINE_ACTIVE) then
     return "-"
   end
-  if not (BUFFER_REPO[abs]) then
+  local abs = get_path_info(self.Path)
+  if not (abs and BUFFER_REPO[abs] and BUFFER_REPO[abs].branch_ptr) then
     return "-"
   end
-  repoid = BUFFER_REPO[abs].repoid
-  branch = BUFFER_REPO[abs].branch
-  return tostring(BUFFER_REPO[abs].display or branch or "none")
+  return tostring(BUFFER_REPO[abs].branch_ptr.display or "-")
 end
 preinit = function()
   add_config("command", "", [[    The absolute path to the command to use for git operations (type: string) 
@@ -1907,12 +1866,16 @@ onSave = function(self)
 end
 onQuit = function(self)
   debug("Caught onQuit, buf:" .. tostring(self))
-  run_callbacks("onQuit", self)
-  local _, abs
-  _, abs, _ = get_path_info(self.Path)
+  local abs, parent, name, pwd = get_path_info(self.Path)
   if abs and BUFFER_REPO[abs] then
     BUFFER_REPO[abs] = nil
   end
+  run_callbacks("onQuit", self, {
+    abs = abs,
+    pwd = pwd,
+    name = name,
+    dir = parent
+  })
   if not (#ACTIVE_COMMITS > 0) then
     return 
   end

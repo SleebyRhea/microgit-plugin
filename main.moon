@@ -324,7 +324,6 @@ make_temp = (->
           return string.upper c
 
     debug "Generated new tempfile: #{dir}/#{file}"
-
     return tostring path.Join dir, file
 )!
 
@@ -443,7 +442,7 @@ git = (->
       unless path_exists base
         return nil, err.Error!
 
-      out = shl.ExecCommand base, "-C", directory, command, ...
+      out = shl.ExecCommand base, "-P", "-C", directory, command, ...
       return out
 
 
@@ -480,10 +479,11 @@ git = (->
       table.insert args, 1, cmd
       table.insert args, 1, directory
       table.insert args, 1, "-C"
+      table.insert args, 1, "-P"
       shl.JobSpawn base, args, on_emit, on_emit, on_exit
       return "", nil
 
-    exec_async_cb = (cmd, on_stdout, on_stderr, on_exit, ...) ->
+    exec_async_cb = (cmd, cb_args={}, on_stdout, on_stderr, on_exit, ...) ->
       unless path_exists directory
         return nil, "directory #{directory} does not exist"
 
@@ -499,16 +499,18 @@ git = (->
       unless path_exists base
         return nil, err.Error!
 
-      on_stdout = assert on_stdout, "exec_async_cb requires an on_stdout callback"
-      on_stderr = assert on_stderr, "exec_async_cb requires an on_stderr callback"
-      on_exit = assert on_exit, "exec_async_cb requires an on_exit callback"
+      debug "e_a_cb: #{cmd}, #{type cb_args}, #{type on_stdout}, #{type on_stderr}, #{type on_exit}"
+      on_stdout = assert on_stdout, "#{cmd}: exec_async_cb requires an on_stdout callback"
+      on_stderr = assert on_stderr, "#{cmd}: exec_async_cb requires an on_stderr callback"
+      on_exit = assert on_exit, "#{cmd}: exec_async_cb requires an on_exit callback"
 
       args = {...}
       table.insert args, 1, cmd
       table.insert args, 1, directory
       table.insert args, 1, "-C"
+      table.insert args, 1, "-P"
       debug "Launching: #{base} #{str.Join args, " "}"
-      shl.JobSpawn base, args, on_stdout, on_stderr, on_exit
+      shl.JobSpawn base, args, on_stdout, on_stderr, on_exit, unpack(cb_args)
       return
     
 
@@ -575,6 +577,7 @@ git = (->
 
   --- Update branch tracked branch information for a buffer
   update_branch_status = (->
+    ref_data_fmt = "--format=%(HEAD);%(refname:short);%(objectname:short);%(upstream:short)"
     re_sha_sum = regexp.MustCompile"^\\s*([0-9a-zA-Z]{40}?)\\s*$"
     (finfo, cmd) =>
       GITLINE_ACTIVE = truthy cfg.GetGlobalOption "#{NAME}.updateinfo"
@@ -592,180 +595,216 @@ git = (->
         if BUFFER_REPO[finfo.abs].branch
           if REPO_STATUS[BUFFER_REPO[finfo.abs].branch]
             return if REPO_STATUS[BUFFER_REPO[finfo.abs].branch].__updating
+
+      local start_chain, parse_repo_root, parse_initial_commit
+      local parse_ref_data, parse_detached_head, start_get_countstaged
+      local parse_diff_string, finish_chain
       
-      branch = ''
-      diff_string  = ''
-      short_commit = ''
-      first_commit = ''
-      count_staged = ''
-      count_behind = ''
-      count_ahead  = ''
-
-      first_commit_err = ''
-      short_commit_err = ''
-      count_staged_err = ''
-      diff_string_err = ''
-      branch_err = ''
-
-      detached = false
-
       set_empty = (reason) ->
         debug "update_branch_status: Setting empty tableset for #{finfo.abs}: #{reason}"
         BUFFER_REPO[finfo.abs] = { repoid: false, branch: false }
 
-      debug "update_branch_status: Beginning update process for #{self}"
-      
-      finish_update = ->
-        unless count_staged_err == ''
-          return set_empty "error encountered getting list of staged files: #{count_staged_err}"
-      
-        count_staged = select(2, (chomp count_staged)\gsub("([^%s\r\n]+)", ''))
-        REPO_STATUS[first_commit][branch].staged = count_staged
-        REPO_STATUS[first_commit][branch].__updating = false
-        BUFFER_REPO[finfo.abs].__updating = false
 
-      start_get_countstaged = ->
-        unless diff_string_err == ''
-          return set_empty "error encountered getting diff string: #{diff_string_err}"
+      repoid = ''
+      branch = ''
+      repo_root = ''
+      repo_root_err = ''
+      start_chain = ->
+        debug "update_branch_status: Beginning update process for #{self}"
+        cmd.exec_async_cb "rev-parse", nil,
+          ((out) -> repo_root ..= out),
+          ((err) -> repo_root_err ..= err),
+          parse_repo_root,
+          "--top-level"
 
-        a, b = 0, 0
-        unless diff_string and diff_string != ''
-          originless = false
-          a, b = (chomp diff_string)\match("^(%d+)%s+(%d+)$")
-        
-        REPO_STATUS[first_commit][branch].ahead = a
-        REPO_STATUS[first_commit][branch].behind = b
+
+      first_commit = ''
+      first_commit_err = ''
+      parse_repo_root = ->
+        unless repo_root_err == ''
+          return set_empty "error encountered getting repository root: #{repo_root_err}"
+        unless repo_root
+          return set_empty "got nil repository root"
+        repo_root = chomp repo_root
+        if repo_root == ''
+          return set_empty "got empty repository root"
           
-        cmd.exec_async_cb "diff",
-          ((out) -> count_staged ..= out),
-          ((err) -> count_staged_err ..= err),
-          finish_update,
-          "--name-only",
-          "--cached"
-          
-      start_get_diffstring = ->
-        unless short_commit and short_commit != ''
-          return set_empty "got empty short commit"
-        unless short_commit_err == ''
-          return set_empty "error encountered getting short commit: #{short_commit_err}"
+        cmd.exec_async_cb "rev-list", nil,
+          ((out) -> first_commit ..= out),
+          ((err) -> first_commit_err ..= err),
+          parse_initial_commit,
+          "--parents",
+          "HEAD",
+          "--reverse"
 
-        revlist_str = "#{branch}...#{branch}"
-        revlist_str = "origin/#{revlist_str}" unless detached
+
+      ref_data = ''
+      ref_data_err = ''
+      parse_initial_commit = ->
+        unless first_commit_err == ''
+          return set_empty "error encountered getting first revision: #{first_commit_err}"
+        unless first_commit and first_commit != ''
+          return set_empty "got empty initial commit"
+        ok = each_line chomp(first_commit),
+          (line, i, len, final) ->
+            _hash = re_sha_sum\FindString line
+            return final false unless _hash and _hash != ''
+            first_commit = _hash
+            return final true
+
+        unless ok
+          return set_empty "failed to parse initial commit"
+
+        repoid = "#{first_commit}:#{repo_root}"
         
-        short_commit = chomp short_commit
-        REPO_STATUS[first_commit][branch].commit = short_commit        
-        cmd.exec_async_cb "rev-list",
+        unless REPO_STATUS[repoid]
+          REPO_STATUS[repoid] = {}
+
+        unless BUFFER_REPO[finfo.abs]
+          BUFFER_REPO[finfo.abs] = {}
+
+        BUFFER_REPO[finfo.abs].repoid = repoid
+        cmd.exec_async_cb "for-each-ref", nil,
+          ((out) -> ref_data ..= out),
+          ((err) -> ref_data_err ..= err),
+          parse_ref_data,
+          ref_data_fmt,
+          "refs/heads"
+
+
+      head_data = ''
+      diff_string = ''
+      head_data_err = ''
+      diff_string_err = ''
+      parse_ref_data = ->
+        unless ref_data_err == ''
+          return set_empty "error encountered getting branch: #{ref_data_err}"
+        unless ref_data and ref_data != ''
+          return set_empty "repository has no branches setup (got empty)"
+
+        get_detached = ->
+          branch = ''
+          branch_err = ''
+          return cmd.exec_async_cb "branch", nil,
+            ((out) -> head_data ..= out),
+            ((err) -> head_data_err ..= err),
+            parse_detached_head,
+            "--contains",
+            "HEAD"
+
+        local origin, branch, commit
+        
+        dbg_msg = "failed to parse ref data: '#{ref_data}'. Checking for detached HEAD"
+        return get_detached! unless each_line ref_data, (line, i, c, final) ->
+          debug "Line: #{line}, #{string.sub(line, 1, 1)}"
+          return unless string.sub(line, 1, 1) == "*"
+          
+          branch, commit, origin = line\match"^%*;([^;]+);([^;]+);([^;]*)$"
+          debug "Got: #{branch}, #{origin}, #{commit}"
+          
+          return final true if origin and origin != ''
+          
+          debug dbg_msg
+          final!
+
+        unless REPO_STATUS[repoid][branch]
+          REPO_STATUS[repoid][branch] = {}
+
+        branch_tbl = REPO_STATUS[repoid][branch]
+        bufinf_tbl = BUFFER_REPO[finfo.abs]
+        
+        branch_tbl.name = branch  
+        branch_tbl.commit = commit
+        branch_tbl.display = branch
+        
+        bufinf_tbl.repoid = repoid
+        bufinf_tbl.branch = branch
+        bufinf_tbl.branch_ptr = branch_tbl
+      
+        cmd.exec_async_cb "rev-list", nil,
           ((out) -> diff_string ..= out),
           ((err) -> diff_string_err ..= err),
-          start_get_countstaged,
+          parse_diff_string,
           "--left-right",
           "--count",
-          revlist_str
+          "#{origin}...#{branch}"
 
-      start_get_detached = ->
-        unless branch and branch != ''
-          return set_empty "got empty branch list"
-        unless branch_err == ''
-          return set_empty "error encountered getting branch: #{branch_err}"
+
+      parse_detached_head = ->
+        n = 'parse_detached_head'
+        unless head_data and head_data != ''
+          return set_empty "#{n}: got empty branch list"
+        unless head_data_err == ''
+          return set_empty "#{n}: error encountered getting branch: #{head_data}"
 
         local commit
-        return set_empty "failed to parse state:" unless each_line chomp(branch),
+
+        return set_empty "failed to parse state: #{head_data}" unless each_line chomp(head_data),
           (line, i, len, final) ->
             _hash = line\match'^%s*%*%s*%(%s*HEAD%s+detached%s+at%s+([0-9A-Za-z]+)%s*%)%s*$'
             if _hash
               commit = _hash
               return final true
 
-        branch, err = cmd.exec "rev-parse", commit
-        if err or not branch
-          return set_empty "could not match detached HEAD to a revision: #{err}"
+        unless REPO_STATUS[repoid][commit]
+          REPO_STATUS[repoid][commit] = {}
 
-        branch = chomp branch
-        unless REPO_STATUS[first_commit][branch]
-          REPO_STATUS[first_commit][branch] = {
-            name: branch
-          }
-
-        unless BUFFER_REPO[finfo.abs]
-          BUFFER_REPO[finfo.abs] = {}
-        BUFFER_REPO[finfo.abs].repoid = first_commit
-        BUFFER_REPO[finfo.abs].branch = branch
-        BUFFER_REPO[finfo.abs].display = "HEAD:#{commit}"
+        branch_tbl = REPO_STATUS[repoid][commit]
+        bufinf_tbl = BUFFER_REPO[finfo.abs]
         
-        cmd.exec_async_cb "rev-parse",
-          ((out) -> short_commit ..= out),
-          ((err) -> short_commit_err ..= err),
-          start_get_diffstring,
-          "--short",
-          branch
-
-      start_get_commit = ->
-        unless branch and branch != ''
-          branch = ''
-          branch_err = ''
-          detached = true
-          return cmd.exec_async_cb "branch",
-            ((out) -> branch ..= out),
-            ((err) -> branch_err ..= err),
-            start_get_detached,
-            "--contains",
-            "HEAD"
-
-        unless branch_err == ''
-          return set_empty "error encountered getting branch: #{branch_err}"
-
-        branch = chomp branch
-        unless REPO_STATUS[first_commit][branch]
-          REPO_STATUS[first_commit][branch] = {
-            name: branch
-          }
-
-        unless BUFFER_REPO[finfo.abs]
-          BUFFER_REPO[finfo.abs] = {}
-        BUFFER_REPO[finfo.abs].repoid = first_commit
-        BUFFER_REPO[finfo.abs].branch = branch
+        branch_tbl.name = commit
+        branch_tbl.commit = commit
+        branch_tbl.display = "(detached HEAD)"
         
-        cmd.exec_async_cb "rev-parse",
-          ((out) -> short_commit ..= out),
-          ((err) -> short_commit_err ..= err),
-          start_get_diffstring,
-          "--short",
-          branch
-
-
-      start_get_branch = ->
-        unless first_commit and first_commit != ''
-          return set_empty "got empty first commit" 
-        unless first_commit_err == ''
-          return set_empty "error encountered getting first revision: #{first_commit_err}"
-        return set_empty "failed to parse first commit" unless each_line chomp(first_commit),
-          (line, i, len, final) ->
-            _hash = re_sha_sum\FindString line
-            return final false unless _hash and _hash != ''
-            first_commit = _hash
-            return final true
+        bufinf_tbl.repoid = repoid
+        bufinf_tbl.branch = commit
+        bufinf_tbl.branch_ptr = branch_tbl
         
-        unless REPO_STATUS[first_commit]
-          REPO_STATUS[first_commit] = {}
+        cmd.exec_async_cb "rev-list", nil,
+          ((out) -> diff_string ..= out),
+          ((err) -> diff_string_err ..= err),
+          parse_diff_string,
+          "--left-right",
+          "--count",
+          "#{commit}...#{commit}"
 
-        unless BUFFER_REPO[finfo.abs]
-          BUFFER_REPO[finfo.abs] = {}
 
-        BUFFER_REPO[finfo.abs].repoid = first_commit
+      count_staged = ''
+      count_staged_err = ''
+      parse_diff_string = ->
+        unless diff_string_err == ''
+          return set_empty "error encountered getting diff string: #{diff_string_err}"
 
-        cmd.exec_async_cb "branch",
-          ((out) -> branch ..= out),
-          ((err) -> branch_err ..= err),
-          start_get_commit,
-          "--show-current"
+        a, b = 0, 0
+        unless diff_string and diff_string != ''
+          a, b = (chomp diff_string)\match("^(%d+)%s+(%d+)$")
 
-      cmd.exec_async_cb "rev-list",
-        ((out) -> first_commit ..= out),
-        ((err) -> first_commit_err ..= err),
-        start_get_branch,
-        "--parents",
-        "HEAD",
-        "--reverse"
+        
+        branch_tbl = BUFFER_REPO[finfo.abs].branch_ptr
+        branch_tbl.ahead = a
+        branch_tbl.behind = b
+          
+        cmd.exec_async_cb "diff", nil,
+          ((out) -> count_staged ..= out),
+          ((err) -> count_staged_err ..= err),
+          finish_chain,
+          "--name-only",
+          "--cached"
+
+      -- Count the number of staged files and mark the repo+branch and file
+      -- as no longer being updated
+      finish_chain = ->
+        unless count_staged_err == ''
+          return set_empty "error encountered getting list of staged files: #{count_staged_err}"
+      
+        staged = select(2, (chomp count_staged)\gsub("([^%s\r\n]+)", ''))
+        branch_tbl = BUFFER_REPO[finfo.abs].branch_ptr
+        branch_tbl.staged = staged
+        branch_tbl.__updating = false
+        BUFFER_REPO[finfo.abs].__updating = false
+        GITLINE_ACTIVE = true
+
+      start_chain!
   )!
 
 
@@ -794,13 +833,13 @@ git = (->
 
     start_get_diffbase = ->
       repo_relative_path = str.TrimPrefix finfo.abs, chomp(top_level)
-      cmd.exec_async_cb "show",
+      cmd.exec_async_cb "show", nil,
         ((out) -> diff_base ..= out),
         ((out) -> diff_base ..= out),
         start_set_diffbase,
         ":./#{repo_relative_path}"
 
-    cmd.exec_async_cb "rev-parse",
+    cmd.exec_async_cb "rev-parse", nil,
       ((out) -> top_level ..= out),
       ((out) -> top_level ..= out),
       start_get_diffbase,
@@ -1369,67 +1408,45 @@ git = (->
   }
 )!
 
+
+-- TODO:  Currently, since the branch pointer changes, the display name is 
+--        not being preserved between updates. This TODO is to look into 
+--        why this is happening. I have no thoughts on this matter yet
+
 export numahead = =>
   return "-" unless GITLINE_ACTIVE
-  local repoid, branch, abs
   abs = get_path_info @Path
-  return "-" unless abs
-  return "-" unless BUFFER_REPO[abs]
-  return "-" unless BUFFER_REPO[abs]
-  repoid = BUFFER_REPO[abs].repoid
-  branch = BUFFER_REPO[abs].branch
-  return "-" unless repoid and branch
-  return "-" unless REPO_STATUS[repoid]
-  return "-" unless REPO_STATUS[repoid][branch]
-  return tostring REPO_STATUS[repoid][branch].ahead
+  return "-" unless abs and BUFFER_REPO[abs] and BUFFER_REPO[abs].branch_ptr
+  return tostring BUFFER_REPO[abs].branch_ptr.ahead or "-"
+
 
 export numbehind = =>
   return "-" unless GITLINE_ACTIVE
-  local repoid, branch, abs
   abs = get_path_info @Path
-  return "-" unless abs
-  return "-" unless BUFFER_REPO[abs]
-  repoid = BUFFER_REPO[abs].repoid
-  branch = BUFFER_REPO[abs].branch
-  return "-" unless repoid and branch
-  return "-" unless REPO_STATUS[repoid]
-  return "-" unless REPO_STATUS[repoid][branch]
-  return tostring REPO_STATUS[repoid][branch].behind
+  return "-" unless abs and BUFFER_REPO[abs] and BUFFER_REPO[abs].branch_ptr
+  return tostring BUFFER_REPO[abs].branch_ptr.behind or "-"
+
 
 export numstaged = =>
   return "-" unless GITLINE_ACTIVE
-  local repoid, branch, abs
   abs = get_path_info @Path
-  return "-" unless abs
-  return "-" unless BUFFER_REPO[abs]
-  repoid = BUFFER_REPO[abs].repoid
-  branch = BUFFER_REPO[abs].branch
-  return "-" unless repoid and branch
-  return "-" unless REPO_STATUS[repoid]
-  return "-" unless REPO_STATUS[repoid][branch]
-  return tostring REPO_STATUS[repoid][branch].staged
+  return "-" unless abs and BUFFER_REPO[abs] and BUFFER_REPO[abs].branch_ptr
+  return tostring BUFFER_REPO[abs].branch_ptr.staged or "-"
+
 
 export oncommit = =>
   return "-" unless GITLINE_ACTIVE
-  local repoid, branch, abs
   abs = get_path_info @Path
-  return "-" unless abs
-  return "-" unless BUFFER_REPO[abs]
-  repoid = BUFFER_REPO[abs].repoid
-  branch = BUFFER_REPO[abs].branch
-  return "-" unless repoid and branch
-  return "-" unless REPO_STATUS[repoid]
-  return "-" unless REPO_STATUS[repoid][branch]
-  return tostring REPO_STATUS[repoid][branch].commit
+  return "-" unless abs and BUFFER_REPO[abs] and BUFFER_REPO[abs].branch_ptr
+  return tostring BUFFER_REPO[abs].branch_ptr.commit or "-"
+
 
 export onbranch = =>
-  local repoid, branch, abs
+  return "-" unless GITLINE_ACTIVE
   abs = get_path_info @Path
-  return "-" unless abs
-  return "-" unless BUFFER_REPO[abs]
-  repoid = BUFFER_REPO[abs].repoid
-  branch = BUFFER_REPO[abs].branch
-  return tostring(BUFFER_REPO[abs].display or branch or "none")
+  return "-" unless abs and BUFFER_REPO[abs] and BUFFER_REPO[abs].branch_ptr
+  return tostring BUFFER_REPO[abs].branch_ptr.display or "-"
+
 
 export preinit = ->
   add_config "command", "", [[
@@ -1604,11 +1621,17 @@ export onSave = =>
 -- commit save prompt and offer a confirmation to save and commit.
 export onQuit = =>
   debug "Caught onQuit, buf:#{@}"
-  run_callbacks "onQuit", self
-
-  _, abs, _ = get_path_info @Path
+  abs, parent, name, pwd  = get_path_info @Path
+  
   if abs and BUFFER_REPO[abs]
     BUFFER_REPO[abs] = nil
+  
+  run_callbacks "onQuit", self, {
+    :abs
+    :pwd
+    :name
+    dir: parent
+  }
     
   return unless #ACTIVE_COMMITS > 0
 
