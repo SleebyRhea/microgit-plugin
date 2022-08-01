@@ -615,7 +615,7 @@ git = (->
           ((out) -> repo_root ..= out),
           ((err) -> repo_root_err ..= err),
           parse_repo_root,
-          "--top-level"
+          "--show-toplevel"
 
 
       first_commit = ''
@@ -1397,7 +1397,7 @@ git = (->
       debug_output ..= "_G.CALLBACKS_SET\n"
       for k, v in pairs CALLBACKS_SET
         for cb, fn in pairs CALLBACKS_SET[k]
-          debug_output ..= "  #{cb}:#{fn}"
+          debug_output ..= "  #{k}: #{fn}\n"
 
       return send.debug debug_output
       

@@ -752,7 +752,7 @@ git = (function()
           repo_root = repo_root .. out
         end), (function(err)
           repo_root_err = repo_root_err .. err
-        end), parse_repo_root, "--top-level")
+        end), parse_repo_root, "--show-toplevel")
       end
       local first_commit = ''
       local first_commit_err = ''
@@ -1643,7 +1643,7 @@ git = (function()
       debug_output = debug_output .. "_G.CALLBACKS_SET\n"
       for k, v in pairs(CALLBACKS_SET) do
         for cb, fn in pairs(CALLBACKS_SET[k]) do
-          debug_output = debug_output .. "  " .. tostring(cb) .. ":" .. tostring(fn)
+          debug_output = debug_output .. "  " .. tostring(k) .. ": " .. tostring(fn) .. "\n"
         end
       end
       return send.debug(debug_output)
