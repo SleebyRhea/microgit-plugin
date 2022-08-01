@@ -1269,7 +1269,7 @@ git = (function()
     ]],
     commit = (function()
       local msg_line = regexp.MustCompile("^\\s*([^#])")
-      local base_msg = "\n"
+      local base_msg = "\n# Committing as:\n#   %name% - %email%\n#\n"
       base_msg = base_msg .. "# Please enter the commit message for your changes. Lines starting\n"
       base_msg = base_msg .. "# with '#' will be ignored, and an empty message aborts the commit.\n#\n"
       return function(self, finfo, msg)
@@ -1294,7 +1294,17 @@ git = (function()
           end
           return send.commit(commit_out)
         end
-        local commit_msg_start = base_msg
+        local name
+        name, err = cmd.exec("config", "user.name")
+        if err then
+          return send.commit(err)
+        end
+        local email
+        email, err = cmd.exec("config", "user.email")
+        if err then
+          return send.commit(err)
+        end
+        local commit_msg_start = base_msg:gsub("%%name%%", chomp(name)):gsub("%%email%%", chomp(email))
         local status_out, _ = cmd.exec("status")
         each_line(chomp(status_out), function(line)
           commit_msg_start = commit_msg_start .. "# " .. tostring(line) .. "\n"
@@ -1330,7 +1340,6 @@ git = (function()
           update_branch_status(buffer, finfo)
           return update_git_diff_base(buffer, finfo)
         end)
-        debug("Awaiting commit completion within onQuit")
       end
     end)(),
     commit_help = [[      Usage: %pub%.commit [<commit message>]

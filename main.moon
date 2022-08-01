@@ -1095,7 +1095,7 @@ git = (->
 
     commit: (->    
       msg_line = regexp.MustCompile"^\\s*([^#])"
-      base_msg = "\n"
+      base_msg = "\n# Committing as:\n#   %name% - %email%\n#\n"
       base_msg ..= "# Please enter the commit message for your changes. Lines starting\n"
       base_msg ..= "# with '#' will be ignored, and an empty message aborts the commit.\n#\n"
 
@@ -1115,11 +1115,18 @@ git = (->
           return send.commit err if err
           return send.commit commit_out
 
-        commit_msg_start = base_msg
+        name, err = cmd.exec "config", "user.name"
+        return send.commit err if err
+        
+        email, err = cmd.exec "config", "user.email"
+        return send.commit err if err
+
+        commit_msg_start = base_msg\gsub("%%name%%", chomp name)\gsub("%%email%%", chomp email)
+        
         status_out, _ = cmd.exec "status"
         each_line chomp(status_out), (line) ->
           commit_msg_start ..= "# #{line}\n"
-        
+
         make_commit_pane self, cmd, commit_msg_start, (buffer, file, _) ->
           return unless file
           
@@ -1148,8 +1155,6 @@ git = (->
           update_branch_status buffer, finfo
           update_git_diff_base buffer, finfo
           
-
-        debug "Awaiting commit completion within onQuit"
         return
     )!
 
