@@ -1309,7 +1309,67 @@ git = (function()
         each_line(chomp(status_out), function(line)
           commit_msg_start = commit_msg_start .. "# " .. tostring(line) .. "\n"
         end)
-        make_commit_pane(self, cmd, commit_msg_start, function(buffer, file, _)
+        add_callback("onQuit", function(pane, finfo)
+          if not (#ACTIVE_COMMITS > 0) then
+            return 
+          end
+          for i, commit in ipairs(ACTIVE_COMMITS) do
+            local _continue_0 = false
+            repeat
+              do
+                if not (commit.pane == pane) then
+                  _continue_0 = true
+                  break
+                end
+                if commit.ready then
+                  commit.callback(pane.Buf, commit.file)
+                  table.remove(ACTIVE_COMMITS, i)
+                  return true
+                end
+                local info = app.InfoBar()
+                if not (pane.Buf:Modified()) then
+                  info:Message("Aborted commit (closed without saving)")
+                  commit.callback(false)
+                  os.Remove(commit.file)
+                  table.remove(ACTIVE_COMMITS, i)
+                  return 
+                end
+                if info.HasYN and info.HasPrompt then
+                  info.YNCallback = function() end
+                  info:AbortCommand()
+                end
+                info:YNPrompt("Would you like to save and commit? (y,n,esc)", function(yes, cancelled)
+                  if cancelled then
+                    return 
+                  end
+                  if not (yes) then
+                    info:Message("Aborted commit (closed without saving)")
+                    os.Remove(commit.file)
+                    commit.callback(false)
+                    pane:ForceQuit()
+                  else
+                    pane.Buf:Save()
+                    pane:ForceQuit()
+                    commit.callback(pane.Buf, commit.file)
+                    os.Remove(commit.file)
+                  end
+                  for t, _temp in ipairs(ACTIVE_COMMITS) do
+                    if _temp == commit then
+                      table.remove(ACTIVE_COMMITS, t)
+                      break
+                    end
+                  end
+                end)
+                return true
+              end
+              _continue_0 = true
+            until true
+            if not _continue_0 then
+              break
+            end
+          end
+        end)
+        return make_commit_pane(self, cmd, commit_msg_start, function(buffer, file, _)
           if not (file) then
             return 
           end
@@ -1849,7 +1909,6 @@ onBufPaneOpen = function(self)
   git.update_git_diff_base(self.Buf, _finfo)
 end
 onSave = function(self)
-  debug("Caught onSave bufpane:" .. tostring(self))
   local _finfo
   local abs, dir, name, pwd = get_path_info(self.Buf.Path)
   if pwd then
@@ -1874,87 +1933,14 @@ onSave = function(self)
   end
 end
 onQuit = function(self)
-  debug("Caught onQuit, buf:" .. tostring(self))
   local abs, parent, name, pwd = get_path_info(self.Path)
   if abs and BUFFER_REPO[abs] then
     BUFFER_REPO[abs] = nil
   end
-  run_callbacks("onQuit", self, {
+  return run_callbacks("onQuit", self, {
     abs = abs,
     pwd = pwd,
     name = name,
     dir = parent
   })
-  if not (#ACTIVE_COMMITS > 0) then
-    return 
-  end
-  debug("Populating temporary table for active commits ...")
-  local active
-  do
-    local _accum_0 = { }
-    local _len_0 = 1
-    for _index_0 = 1, #ACTIVE_COMMITS do
-      local commit = ACTIVE_COMMITS[_index_0]
-      _accum_0[_len_0] = commit
-      _len_0 = _len_0 + 1
-    end
-    active = _accum_0
-  end
-  debug("Iterating through known commits ...")
-  for i, commit in ipairs(ACTIVE_COMMITS) do
-    if commit.pane == self then
-      if commit.ready then
-        debug("Commit " .. tostring(i) .. " is ready, fulfilling active commit ...")
-        commit.callback(self.Buf, commit.file)
-        for t, _temp in ipairs(active) do
-          if _temp == commit then
-            table.remove(active, t)
-            ACTIVE_COMMITS = active
-            break
-          end
-        end
-      else
-        local info = app.InfoBar()
-        if not (self.Buf:Modified()) then
-          info:Message("Aborted commit (closed without saving)")
-          commit.callback(false)
-          os.Remove(commit.file)
-          for t, _temp in ipairs(active) do
-            if _temp == commit then
-              table.remove(active, t)
-              ACTIVE_COMMITS = active
-              break
-            end
-          end
-        else
-          if info.HasYN and info.HasPrompt then
-            info.YNCallback = function() end
-            info:AbortCommand()
-          end
-          info:YNPrompt("Would you like to save and commit? (y,n,esc)", function(yes, cancelled)
-            if cancelled then
-              return 
-            end
-            if yes then
-              self.Buf:Save()
-              self:ForceQuit()
-              commit.callback(self.Buf, commit.file)
-              os.Remove(commit.file)
-            else
-              info:Message("Aborted commit (closed without saving)")
-              os.Remove(commit.file)
-              commit.callback(false)
-              self:ForceQuit()
-            end
-            for t, _temp in ipairs(ACTIVE_COMMITS) do
-              if _temp == commit then
-                table.remove(ACTIVE_COMMITS, t)
-                break
-              end
-            end
-          end)
-        end
-      end
-    end
-  end
 end

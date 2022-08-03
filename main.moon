@@ -512,7 +512,6 @@ git = (->
       debug "Launching: #{base} #{str.Join args, " "}"
       shl.JobSpawn base, args, on_stdout, on_stderr, on_exit, unpack(cb_args)
       return
-    
 
     --- Return true or false dependent on whether or not the context is a repo
     in_repo = ->
@@ -575,7 +574,10 @@ git = (->
     }
 
 
-  --- Update branch tracked branch information for a buffer
+  --- Updates tracked branch information for the given buffer
+  -- @tparam table|nil Path information for the operative buffer
+  -- @tparam userdata Triggering buffer object
+  -- @return none
   update_branch_status = (->
     ref_data_fmt = "--format=%(HEAD);%(refname:short);%(objectname:short);%(upstream:short)"
     re_sha_sum = regexp.MustCompile"^\\s*([0-9a-zA-Z]{40}?)\\s*$"
@@ -809,6 +811,11 @@ git = (->
 
 
   suppress = " (to suppress this message, set #{NAME}.gitgutter to false)"
+
+  --- Updates the base object that Micro will use to diff the current buffer against
+  -- @tparam table|nil Path information for the operative buffer
+  -- @tparam userdata Triggering buffer object
+  -- @return none
   update_git_diff_base = (finfo, cmd) =>
     return unless truthy cfg.GetGlobalOption "#{NAME}.gitgutter"
     return unless @Settings["diffgutter"] and finfo and (not @Type.Scratch) and (@Path != '')
@@ -845,13 +852,20 @@ git = (->
       start_get_diffbase,
       "--show-toplevel"  
 
-  --- Create a new pane with the contents of output. Add that
-  -- pane to the list of ACTIVE_COMMITS, and write the contents of output to
-  -- a temporary file.
+  --- Create a new pane with the contents of output.
+  -- 
+  -- This function take the generated pane and inserts it along with the temp
+  -- file used by git.commit and a callback to the table of active commits.
   --
   -- The provided callback function should have the signature with string being
   -- a filepath.
   --   (string) ->
+  -- 
+  -- @tparam userdata root pane object
+  -- @tparam table git.new_command object (used to diff the current buffer)
+  -- @tparam output string to populate new pane with
+  -- @tparam function oncommit callback
+  -- @return none
   make_commit_pane = (root, cmd, output, fn) ->
     filepath = make_temp 'commit'
     ioutil.WriteFile filepath, output, 0x1B0 -- 0660, to account for octal
@@ -1127,6 +1141,50 @@ git = (->
         each_line chomp(status_out), (line) ->
           commit_msg_start ..= "# #{line}\n"
 
+        add_callback "onQuit", (pane, finfo) ->
+          return unless #ACTIVE_COMMITS > 0
+          
+          for i, commit in ipairs ACTIVE_COMMITS
+            continue unless commit.pane == pane
+            if commit.ready
+              commit.callback pane.Buf, commit.file
+              table.remove ACTIVE_COMMITS, i
+              return true
+
+            info = app.InfoBar!
+            unless pane.Buf\Modified!
+              info\Message "Aborted commit (closed without saving)"
+              commit.callback false
+              os.Remove commit.file
+              table.remove ACTIVE_COMMITS, i
+              return
+
+            if info.HasYN and info.HasPrompt
+              info.YNCallback = ->
+              info\AbortCommand!
+
+            info\YNPrompt "Would you like to save and commit? (y,n,esc)",
+              (yes, cancelled) ->
+                return if cancelled
+                
+                unless yes
+                  info\Message "Aborted commit (closed without saving)"
+                  os.Remove commit.file
+                  commit.callback false
+                  pane\ForceQuit!
+                else
+                  pane.Buf\Save!
+                  pane\ForceQuit!
+                  commit.callback pane.Buf, commit.file
+                  os.Remove commit.file
+                
+                for t, _temp in ipairs ACTIVE_COMMITS
+                  if _temp == commit
+                    table.remove ACTIVE_COMMITS, t
+                    break
+                    
+            return true
+
         make_commit_pane self, cmd, commit_msg_start, (buffer, file, _) ->
           return unless file
           
@@ -1154,8 +1212,6 @@ git = (->
           
           update_branch_status buffer, finfo
           update_git_diff_base buffer, finfo
-          
-        return
     )!
 
     commit_help: [[
@@ -1605,8 +1661,8 @@ export onBufPaneOpen = =>
 --- Update branch tracking for the buffer, and if its a commit pane mark it as
 -- ready to commit
 export onSave = =>
-  debug "Caught onSave bufpane:#{self}"
   local _finfo
+
   abs, dir, name, pwd = get_path_info @Buf.Path
   _finfo = {:dir, :abs, :name, :pwd} if pwd
   git.update_branch_status @Buf, _finfo
@@ -1625,9 +1681,7 @@ export onSave = =>
 -- callback function if it's been modified and saved. Alternatively, hijack the
 -- commit save prompt and offer a confirmation to save and commit.
 export onQuit = =>
-  debug "Caught onQuit, buf:#{@}"
   abs, parent, name, pwd  = get_path_info @Path
-  
   if abs and BUFFER_REPO[abs]
     BUFFER_REPO[abs] = nil
   
@@ -1637,56 +1691,3 @@ export onQuit = =>
     :name
     dir: parent
   }
-    
-  return unless #ACTIVE_COMMITS > 0
-
-  debug "Populating temporary table for active commits ..."
-  active = [commit for commit in *ACTIVE_COMMITS]
-
-  debug "Iterating through known commits ..."
-  for i, commit in ipairs ACTIVE_COMMITS
-    if commit.pane == self
-      if commit.ready
-        debug "Commit #{i} is ready, fulfilling active commit ..."
-        commit.callback @Buf, commit.file
-        for t, _temp in ipairs active
-          if _temp == commit
-            table.remove active, t
-            ACTIVE_COMMITS = active
-            break
-      else
-        info = app.InfoBar!
-        unless @Buf\Modified!
-          info\Message "Aborted commit (closed without saving)"
-          commit.callback false
-          os.Remove commit.file
-          for t, _temp in ipairs active
-            if _temp == commit
-              table.remove active, t
-              ACTIVE_COMMITS = active
-              break
-        else
-          if info.HasYN and info.HasPrompt
-            info.YNCallback = ->
-            info\AbortCommand!
-          
-          info\YNPrompt "Would you like to save and commit? (y,n,esc)",
-            (yes, cancelled) ->
-              return if cancelled
-              
-              if yes
-                @Buf\Save!
-                @ForceQuit!
-                commit.callback @Buf, commit.file
-                os.Remove commit.file
-              else
-                info\Message "Aborted commit (closed without saving)"
-                os.Remove commit.file
-                commit.callback false
-                @ForceQuit!
-
-              for t, _temp in ipairs ACTIVE_COMMITS
-                if _temp == commit
-                  table.remove ACTIVE_COMMITS, t
-                  break
-  return
