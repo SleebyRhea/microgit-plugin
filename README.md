@@ -57,3 +57,7 @@ This plugin exposes the following functions for statusline configurations:
     - Unstage one or more files. If `--all` is provided, unstage all files
   - `git.rm`
     - Remove one or more files. If `.` is provided, remove all files
+
+
+## Environment
+This plugin comes with a debug command not listed above called (`git.debug`), to enable this command set `MICROGIT_DEBUG=1` in your environment

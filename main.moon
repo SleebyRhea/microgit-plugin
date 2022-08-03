@@ -1629,12 +1629,13 @@ export init = ->
       git.update_branch_status
       git.update_git_diff_base
     }
-    
-  add_command "debug", git.debug, 
-    callbacks: {
-      git.update_branch_status
-      git.update_git_diff_base
-    }
+
+  if os.Getenv"MICROGIT_DEBUG" == "1"
+    add_command "debug", git.debug, 
+      callbacks: {
+        git.update_branch_status
+        git.update_git_diff_base
+      }
 
   -- You would think that git.commit wants a callback, but since it opens a 
   -- pane and creates a callback to process that pane, we just use that one

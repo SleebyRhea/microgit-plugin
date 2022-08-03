@@ -1880,12 +1880,14 @@ init = function()
       git.update_git_diff_base
     }
   })
-  add_command("debug", git.debug, {
-    callbacks = {
-      git.update_branch_status,
-      git.update_git_diff_base
-    }
-  })
+  if os.Getenv("MICROGIT_DEBUG") == "1" then
+    add_command("debug", git.debug, {
+      callbacks = {
+        git.update_branch_status,
+        git.update_git_diff_base
+      }
+    })
+  end
   add_command("commit", git.commit)
   add_command("list", git.list)
   add_command("log", git.log)
