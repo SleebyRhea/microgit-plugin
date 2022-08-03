@@ -1470,10 +1470,6 @@ git = (->
 )!
 
 
--- TODO:  Currently, since the branch pointer changes, the display name is 
---        not being preserved between updates. This TODO is to look into 
---        why this is happening. I have no thoughts on this matter yet
-
 export numahead = =>
   return "-" unless GITLINE_ACTIVE
   abs = get_path_info @Path
