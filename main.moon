@@ -499,7 +499,6 @@ git = (->
       unless path_exists base
         return nil, err.Error!
 
-      debug "e_a_cb: #{cmd}, #{type cb_args}, #{type on_stdout}, #{type on_stderr}, #{type on_exit}"
       on_stdout = assert on_stdout, "#{cmd}: exec_async_cb requires an on_stdout callback"
       on_stderr = assert on_stderr, "#{cmd}: exec_async_cb requires an on_stderr callback"
       on_exit = assert on_exit, "#{cmd}: exec_async_cb requires an on_exit callback"

@@ -613,7 +613,6 @@ git = (function()
       if not (path_exists(base)) then
         return nil, err.Error()
       end
-      debug("e_a_cb: " .. tostring(cmd) .. ", " .. tostring(type(cb_args)) .. ", " .. tostring(type(on_stdout)) .. ", " .. tostring(type(on_stderr)) .. ", " .. tostring(type(on_exit)))
       on_stdout = assert(on_stdout, tostring(cmd) .. ": exec_async_cb requires an on_stdout callback")
       on_stderr = assert(on_stderr, tostring(cmd) .. ": exec_async_cb requires an on_stderr callback")
       on_exit = assert(on_exit, tostring(cmd) .. ": exec_async_cb requires an on_exit callback")
