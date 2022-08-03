@@ -56,6 +56,8 @@ errors = {
 
 
 --- Add a function to the list of callbacks for the given callback string
+-- @tparam string callback name
+-- @tparam function function to run during the given callback run
 add_callback = (callback, fn) ->
   unless CALLBACKS_SET[callback]
     CALLBACKS_SET[callback] = {}
@@ -63,8 +65,12 @@ add_callback = (callback, fn) ->
 
 
 --- Run all callbacks for the given callback against the arguments provided
--- If callback returns a truthy value, it is removed from the list. Otherwise
--- it is retained
+-- 
+-- When a calback is run, if it returns a truthy value, it is removed from the 
+-- list. Otherwise, it is retained for further runs.
+--
+-- @tparam name callback name to run
+-- @tparam ...any arguments that will be passed to each callback
 run_callbacks = (callback, ...) ->
   active = {}
   for i, fn in ipairs (CALLBACKS_SET[callback] or {})
@@ -74,12 +80,16 @@ run_callbacks = (callback, ...) ->
       
 
 --- Delete leading and trailing spaces, and the final newline
+-- @tparam string string to process
 chomp = (s) ->
   s = s\gsub("^%s*", "")\gsub("%s*$", "")\gsub("[\n\r]*$", "")
   return s
 
 
 --- Reimplementation of util.ReplaceHome, as it's not exposed to lua
+-- @tparam string filepath string
+-- @return string|nil processed filepath, nil on error
+-- @return error
 replace_home = (_path) ->
   switch true
     when truthy str.HasPrefix(_path, "~")
@@ -94,6 +104,17 @@ replace_home = (_path) ->
 
 
 --- Run a given function for each line in a string
+-- 
+-- The function signature should be (string, number, number, function). In order,
+-- those represent the line being processed, the current line number, the total
+-- line count, and a function that ends the loop before the following line.
+--
+-- @tparam string input string to process line by line
+-- @tparam function function to run for each line
+--
+-- @example 
+--    each_line (line, i, total, final) ->
+--      return final!
 each_line = (input, fn) ->
   input = str.Replace input, "\r\n", "\n", -1
   input = str.Replace input, "\n\r", "\n", -1
@@ -113,9 +134,18 @@ each_line = (input, fn) ->
 
   return finish_ret, finish_err
 
--- filepath.Abs and filepath.IsAbs both exist, however, their use in Lua code
--- here currently panics the application. Until then, we'll just have to rely
--- on something hacky in the meantime. This is pretty gross, but it works.
+--- Process a filepath and return information regarding it
+--
+-- @tparam string filepath to process 
+-- @return string the absolute version of the filepath given
+-- @return string the parent directory of the filepath given
+-- @return string the basename of the filepath given
+-- @return string the current working directory
+--
+-- NOTE: filepath.Abs and filepath.IsAbs both exist, however, their use in Lua
+--       code here currently panics the application. Until then, we'll just have
+--       to rely on something hacky in the meantime. This is pretty gross, but
+--       it works.
 get_path_info = (->
   s = string.char os.PathSeparator
   insert = table.insert
@@ -891,6 +921,8 @@ git = (->
         diff_pane\ForceQuit! unless closed
         closed = true
         fn ...
+
+    commit_pane\SetActive!
 
     table.insert ACTIVE_COMMITS, {
       pane: commit_pane
