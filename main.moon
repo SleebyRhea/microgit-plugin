@@ -371,6 +371,16 @@ path_exists = (filepath) ->
   return finfo != nil
 
 
+--- Create a temporary file and return the filepath.
+--
+-- Files created using this function will be created within a tmp
+-- directory within the Micro main directory with the format:
+--
+--   $plugin.$header.XXXXXXXXXXXX
+--
+-- X characters will be replaced with a random capital letter, x lowercase.
+--
+-- @return string
 make_temp = (->
   rand = go.import "math/rand"
   chars = 'qwertyuioasdfghjklzxcvbnm'
@@ -1678,7 +1688,7 @@ export init = ->
       git.update_git_diff_base
     }
 
-  add_command "unstage", git.unstage, 
+  add_command "unstage", git.unstage,
     completer: cfg.FileComplete
     callbacks: {
       git.update_branch_status
@@ -1744,7 +1754,7 @@ export onSave = =>
 -- callback function if it's been modified and saved. Alternatively, hijack the
 -- commit save prompt and offer a confirmation to save and commit.
 export onQuit = =>
-  abs, parent, name, pwd  = get_path_info @Path
+  abs, parent, name, pwd = get_path_info @Path
   if abs and BUFFER_REPO[abs]
     BUFFER_REPO[abs] = nil
   
