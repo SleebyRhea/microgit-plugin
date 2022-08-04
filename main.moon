@@ -153,13 +153,19 @@ get_path_info = (->
 
   re_part = regexp.MustCompile "[^#{s}]+"
   re_root = regexp.MustCompile "^#{windows and '[a-zA-Z]:' or ''}#{s}#{s}?"
-
+  
+  --- Convert a goarray to a table using a numerical for loop
+  -- @tparam array Array to convert
+  -- @local
   convert = (goarray) ->
     tbl, len = {}, #goarray
     for i = 1, len
       insert tbl, goarray[i]
     return tbl
 
+  --- Check whether or not a filepath is has the root (/) or windows drive (C://)
+  -- @tparam string filepath to check
+  -- @local
   has_root = (s) ->
     re_root\Match s
 
@@ -203,18 +209,31 @@ get_path_info = (->
       absolute = s .. absolute
   
     canon_split = re_part\FindAllString absolute, -1
-
-    len = #canon_split
-    name = canon_split[len]
+    name = canon_split[#canon_split]
     parent = (str.TrimSuffix absolute, name) or ""
     parent = (str.TrimSuffix parent, s) or ""
 
     return absolute, parent, name, pwd
 )!
 
+
 --- Register a provided function+callback as a command
+--
 -- Wraps the given function to account for Micros handling of arguments placing
--- additional arguments of len size > 1 in a Go array
+-- additional arguments of len size > 1 in a Go array.
+--
+-- Command functions need to take a window object (pane, split, etc) as the
+-- first argument, a fileinfo table as the second argument (see get_path_info).
+-- Every argument following this is what is provided on the Micro command line.
+--
+-- TODO: For now, commands get their infomation from the git local table, using
+--       git[${commandname}_help] to determine whether or not commands have a
+--       proper help section. This should be changed to use the config table.
+--
+-- @tparam string private name of the command to register
+-- @tparam function function to use as the command function
+-- @tparam table additional configuration
+-- @return none
 add_command = (name, fn, config={}) ->
   return if LOADED_COMMANDS[name]
 
@@ -246,9 +265,16 @@ add_command = (name, fn, config={}) ->
   table.insert LOADED_COMMANDS.__order, name
 
 
---- Register a provided configuration option
+--- Register a configuration option
+--
 -- Canonicalizes the option name, and places the provided information into
--- the LOADED_OPTIONS table for later usage
+-- the LOADED_OPTIONS table for later usage. The description provided will
+-- be loaded into the help page for the option
+--
+-- @tparam string configuration name
+-- @tparam any default value for the configuration
+-- @tparam string description to be loaded into help
+-- @return none
 add_config = (name, default, description) ->
   return if LOADED_OPTIONS[name]
   
@@ -258,8 +284,15 @@ add_config = (name, default, description) ->
 
 
 --- Register a provided statusline parameter function
--- Canonicalizes the parameter name, and places the provided information into
--- the LOADED_PARAMS table for later usage
+--
+-- Canonicalizes the option name, and places the provided information into
+-- the LOADED_PARAMS table for later usage. The description provided will
+-- be loaded into the help page for the option
+--
+-- @tparam string configuration name
+-- @tparam any default value for the configuration
+-- @tparam string description to be loaded into help
+-- @return none
 add_statusinfo = (name, fn, description) ->
   return if LOADED_LINEFNS[name]
 
@@ -267,7 +300,9 @@ add_statusinfo = (name, fn, description) ->
   LOADED_LINEFNS[name] = description
   table.insert LOADED_LINEFNS.__order, name
 
---- Generates our help pages for the various registered components and loads them
+--- Generates our help pages for the various registered components and loads
+-- them into the following pages: ${plugin}.command, ${plugin}.options, and
+-- ${plugin}.statusline
 generate_help = (-> 
   get_parser = ->
     on_line, margin, parsed = 1, '', ''

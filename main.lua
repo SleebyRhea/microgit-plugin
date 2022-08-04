@@ -212,8 +212,7 @@ local get_path_info = (function()
       absolute = s .. absolute
     end
     canon_split = re_part:FindAllString(absolute, -1)
-    local len = #canon_split
-    local name = canon_split[len]
+    local name = canon_split[#canon_split]
     local parent = (str.TrimSuffix(absolute, name)) or ""
     parent = (str.TrimSuffix(parent, s)) or ""
     return absolute, parent, name, pwd
@@ -1012,6 +1011,7 @@ git = (function()
         return fn(...)
       end
     end
+    commit_pane:SetActive()
     return table.insert(ACTIVE_COMMITS, {
       pane = commit_pane,
       file = filepath,
