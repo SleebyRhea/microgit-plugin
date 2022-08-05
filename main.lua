@@ -16,6 +16,7 @@ local buf = go.import("micro/buffer")
 local cfg = go.import("micro/config")
 local shl = go.import("micro/shell")
 local str = go.import("strings")
+local util = go.import("micro/util")
 local path = go.import("path")
 local fpath = go.import("path/file")
 local ioutil = go.import("ioutil")
@@ -45,6 +46,7 @@ if not (LOADED_LINEFNS) then
     __order = { }
   }
 end
+local PATHSEP = string.char(os.PathSeparator)
 local bound
 bound = function(n, min, max)
   return n > max and max or (n < min and min or n)
@@ -103,13 +105,13 @@ replace_home = function(_path)
     if err then
       return nil, err
     end
-    return str.Replace(_path, "~", (home .. string.char(os.PathSeparator)), 1)
+    return str.Replace(_path, "~", (home .. PATHSEP), 1)
   elseif truthy(str.HasPrefix(_path, "%USERPROFILE%")) == _exp_0 then
     local home, err = os.UserHomeDir()
     if err then
       return nil, err
     end
-    return str.Replace(_path, "%USERPROFILE%", (home .. string.char(os.PathSeparator)), 1)
+    return str.Replace(_path, "%USERPROFILE%", (home .. PATHSEP), 1)
   end
   return _path
 end
@@ -137,6 +139,18 @@ each_line = function(input, fn)
   end
   return finish_ret, finish_err
 end
+local iter_goarray
+iter_goarray = function(object)
+  local len = #object
+  local i = 0
+  return function()
+    i = i + 1
+    if i > len then
+      return 
+    end
+    return i, object[i], len
+  end
+end
 local get_path_info = (function()
   local s = string.char(os.PathSeparator)
   local insert = table.insert
@@ -155,18 +169,6 @@ local get_path_info = (function()
   has_root = function(s)
     return re_root:Match(s)
   end
-  local array
-  array = function(tbl)
-    local len = #tbl
-    local i = 0
-    return function()
-      i = i + 1
-      if i > len then
-        return 
-      end
-      return i, tbl[i], len
-    end
-  end
   return function(filepath)
     if filepath == nil then
       filepath = ""
@@ -182,7 +184,7 @@ local get_path_info = (function()
     end
     local skip = 0
     local canon_split = { }
-    for i, ent, len in array(re_part:FindAllString(work_string, -1)) do
+    for i, ent, len in iter_goarray(re_part:FindAllString(work_string, -1)) do
       local _continue_0 = false
       repeat
         local _exp_0 = true
@@ -492,6 +494,21 @@ send_block = function(header, output, syntax)
   end), header, output)
   pane.Buf.Type.Syntax = truthy(syntax)
 end
+local get_arg
+get_arg = function(self)
+  local c = self:GetActiveCursor()
+  local args = str.Split(util.String(self:LineBytes(c.Y)), ' ')
+  local count = #args
+  local current = args[count]
+  local argstart = 0
+  for i, a in iter_goarray(args) do
+    if i == count then
+      break
+    end
+    argstart = argstart + (util.CharacterCountInString(a) + 1)
+  end
+  return args, current, argstart - 1
+end
 git = (function()
   local w_commit = wordify('commit', '', 's')
   local w_line = wordify('line', '', 's')
@@ -679,7 +696,15 @@ git = (function()
     end
     local known_label
     known_label = function(label)
-      local out, err = exec("rev-parse", "--quiet", "--verify", label)
+      local out = exec("for-each-ref", "--format=%(refname:short)", "refs/heads", "refs/remotes")
+      each_line((out or ""), function(line, _, _, final)
+        if label == line or str.HasSuffix(line, "/" .. tostring(label)) then
+          label = line
+          return final(true)
+        end
+      end)
+      local err
+      out, err = exec("rev-parse", "--quiet", "--verify", label)
       if not ((err and err ~= "") or (out and out ~= "")) then
         return false, err
       end
@@ -1011,7 +1036,8 @@ git = (function()
         return fn(...)
       end
     end
-    commit_pane:SetActive()
+    local tab = (commit_pane:Tab())
+    tab:SetActive(tab:GetPane(commit_pane:ID()))
     return table.insert(ACTIVE_COMMITS, {
       pane = commit_pane,
       file = filepath,
@@ -1020,9 +1046,118 @@ git = (function()
       callback = callback
     })
   end
+  local branch_complete = (function()
+    local ref_data_fmt = "--format=%(refname:short);%(objectname:short)"
+    return function(self)
+      local root = app.CurPane()
+      if not (root) then
+        return nil, nil
+      end
+      local _, dir
+      _, dir, _, _ = get_path_info(root.Buf.Path)
+      local cmd = new_command(dir)
+      if not (cmd) then
+        return nil, nil
+      end
+      if not (cmd.in_repo()) then
+        return nil, nil
+      end
+      local out = cmd.exec('for-each-ref', ref_data_fmt, "refs/heads", "refs/remotes", "refs/tags")
+      if not (out) then
+        return nil, nil
+      end
+      local args, arg, place = get_arg(self)
+      local branches = { }
+      local suggestions = { }
+      local completions = { }
+      local added = { }
+      each_line(out, function(line)
+        local branch = line:match("^([^;]+);([^;]+)$")
+        if not (branch) then
+          return 
+        end
+        branch = branch:gsub("^[^/]+/", "")
+        if added[branch] then
+          return 
+        end
+        table.insert(branches, branch)
+        added[branch] = true
+      end)
+      local c = self:GetActiveCursor()
+      for _, branch in ipairs(branches) do
+        if str.HasPrefix(branch, arg) and not (branch == arg) then
+          table.insert(suggestions, branch)
+          table.insert(completions, string.sub(branch, c.X - place))
+        end
+      end
+      return completions, suggestions
+    end
+  end)()
+  local repo_complete
+  repo_complete = function(self)
+    local root = app.CurPane()
+    local c = self:GetActiveCursor()
+    local _, dir
+    _, dir, _, _ = get_path_info(root.Buf.Path)
+    local cmd, err = new_command(dir)
+    if not (cmd) then
+      return nil, nil
+    end
+    if not (cmd.in_repo()) then
+      return nil, nil
+    end
+    local repo_root = cmd.top_level()
+    if not (repo_root) then
+      return nil, nil
+    end
+    local args, arg, place = get_arg(self)
+    local dirs = str.Split(arg, PATHSEP)
+    local dir_str = str.Join((function()
+      local _accum_0 = { }
+      local _len_0 = 1
+      for _index_0 = 1, #dirs do
+        local d = dirs[_index_0]
+        _accum_0[_len_0] = d
+        _len_0 = _len_0 + 1
+      end
+      return _accum_0
+    end)(), PATHSEP)
+    local files = { }
+    local err
+    if #dirs > 1 then
+      local _path = replace_home(dir_str .. PATHSEP)
+      if not (str.HasPrefix(_path, PATHSEP)) then
+        _path = repo_root .. PATHSEP .. _path
+      end
+      files, err = ioutil.ReadDir(_path)
+    else
+      files, err = ioutil.ReadDir(repo_root)
+    end
+    if err then
+      return nil, nil
+    end
+    local suggestions = { }
+    local completions = { }
+    for _, f in iter_goarray(files) do
+      local name = f:Name()
+      if f:IsDir() then
+        name = name .. PATHSEP
+      end
+      if str.HasPrefix(name, dirs[#dirs]) then
+        table.insert(suggestions, name)
+        if #dirs > 1 then
+          name = dir_str .. name
+        end
+        table.insert(completions, string.sub(name, c.X - place))
+      end
+    end
+    return completions, suggestions
+  end
   return {
     update_branch_status = update_branch_status,
     update_git_diff_base = update_git_diff_base,
+    branch_complete = branch_complete,
+    repo_complete = repo_complete,
     init = function(self, finfo)
       if not (finfo) then
         return send.init(errors.need_file)
@@ -1106,7 +1241,7 @@ git = (function()
 
       Options:
         -s --staged   Include staged files
-        -a --all       Diff entire repository
+        -a --all      Diff entire repository
     ]],
     fetch = function(self, finfo)
       if not (finfo) then
@@ -1532,7 +1667,7 @@ git = (function()
           if err then
             return send.stage(err)
           end
-          if not (path_exists(file)) then
+          if not (path_exists(file) or path_exists(cmd.top_level() .. PATHSEP .. file)) then
             return send.stage(errors.invalid_arg .. ", file " .. tostring(file) .. " doesn't exist")
           end
           table.insert(files, file)
@@ -1589,7 +1724,7 @@ git = (function()
           if err then
             return send.unstage(err)
           end
-          if not (path_exists(file)) then
+          if not (path_exists(file) or path_exists(cmd.top_level() .. PATHSEP .. file)) then
             return send.unstage(errors.invalid_arg .. "(file " .. tostring(file) .. " doesn't exist)")
           end
           table.insert(files, file)
@@ -1814,12 +1949,14 @@ preinit = function()
 end
 init = function()
   debug("Initializing " .. tostring(NAME))
-  local cmd = tostring(cfg.GetGlobalOption(tostring(NAMES) .. ".command"))
+  local cmd = tostring(cfg.GetGlobalOption(tostring(NAME) .. ".command"))
   if cmd == "" then
     local _
     cmd, _ = shl.ExecCommand("command", "-v", "git")
     if cmd == '' or not cmd then
-      app.TermMessage(tostring(NAME) .. ": git not present in $PATH or set, some functionality will not work correctly")
+      app.TermMessage(tostring(NAME) .. ": git not present in $PATH or set, plugin will not work correctly")
+    else
+      cfg.SetGlobalOption(tostring(NAME) .. ".command", chomp(cmd))
     end
   end
   add_command("init", git.init, {
@@ -1829,12 +1966,14 @@ init = function()
     }
   })
   add_command("pull", git.pull, {
+    completer = git.branch_complete,
     callbacks = {
       git.update_branch_status,
       git.update_git_diff_base
     }
   })
   add_command("push", git.push, {
+    completer = git.branch_complete,
     callbacks = {
       git.update_branch_status,
       git.update_git_diff_base
@@ -1847,33 +1986,35 @@ init = function()
     }
   })
   add_command("fetch", git.fetch, {
+    completer = git.branch_complete,
     callbacks = {
       git.update_branch_status,
       git.update_git_diff_base
     }
   })
   add_command("checkout", git.checkout, {
+    completer = git.branch_complete,
     callbacks = {
       git.update_branch_status,
       git.update_git_diff_base
     }
   })
   add_command("stage", git.stage, {
-    completer = cfg.FileComplete,
+    completer = git.repo_complete,
     callbacks = {
       git.update_branch_status,
       git.update_git_diff_base
     }
   })
   add_command("unstage", git.unstage, {
-    completer = cfg.FileComplete,
+    completer = git.repo_complete,
     callbacks = {
       git.update_branch_status,
       git.update_git_diff_base
     }
   })
   add_command("rm", git.rm, {
-    completer = cfg.FileComplete,
+    completer = git.repo_complete,
     callbacks = {
       git.update_branch_status,
       git.update_git_diff_base

@@ -21,6 +21,7 @@ buf = go.import"micro/buffer"
 cfg = go.import"micro/config"
 shl = go.import"micro/shell"
 str = go.import"strings"
+util = go.import"micro/util"
 path = go.import"path"
 fpath = go.import"path/file"
 ioutil = go.import"ioutil"
@@ -37,6 +38,7 @@ REPO_STATUS = {}
 LOADED_COMMANDS = { __order: {} } unless LOADED_COMMANDS
 LOADED_OPTIONS = { __order: {} } unless LOADED_OPTIONS
 LOADED_LINEFNS = { __order: {} } unless LOADED_LINEFNS
+PATHSEP = string.char os.PathSeparator
 
 bound  = (n, min, max) -> n > max and max or (n < min and min or n)
 debug  = (m) -> app.Log "#{NAME}: #{m}"
@@ -95,11 +97,11 @@ replace_home = (_path) ->
     when truthy str.HasPrefix(_path, "~")
       home, err = os.UserHomeDir!
       return nil, err if err
-      return str.Replace _path, "~", (home .. string.char os.PathSeparator), 1
+      return str.Replace _path, "~", (home .. PATHSEP), 1
     when truthy str.HasPrefix(_path, "%USERPROFILE%")
       home, err = os.UserHomeDir!
       return nil, err if err
-      return str.Replace _path, "%USERPROFILE%", (home .. string.char os.PathSeparator), 1
+      return str.Replace _path, "%USERPROFILE%", (home .. PATHSEP), 1
   return _path
 
 
@@ -133,6 +135,20 @@ each_line = (input, fn) ->
     fn lines[i], i, l_count, finish
 
   return finish_ret, finish_err
+
+
+--- Iterate over a golang array
+--
+-- @tparam userdata golang array
+-- @return function iterator function
+iter_goarray = (object) ->
+  len = #object
+  i = 0
+  return ->
+    i += 1
+    return if i > len
+    return i, object[i], len
+
 
 --- Process a filepath and return information regarding it
 --
@@ -169,14 +185,6 @@ get_path_info = (->
   has_root = (s) ->
     re_root\Match s
 
-  array = (tbl) ->
-    len = #tbl
-    i = 0
-    return ->
-      i += 1
-      return if i > len
-      return i, tbl[i], len
-
   return (filepath="") ->
     return nil unless filepath != "" and type(filepath) == "string"
   
@@ -189,7 +197,7 @@ get_path_info = (->
 
     skip = 0
     canon_split = {}
-    for i, ent, len in array re_part\FindAllString work_string, -1
+    for i, ent, len in iter_goarray re_part\FindAllString work_string, -1
       switch true
         when ent == "."
           continue
@@ -466,6 +474,27 @@ send_block = (header, output, syntax=false) ->
   pane = make_empty_hsplit app.CurPane!, ((h) -> h - (h / 5)), header, output
   pane.Buf.Type.Syntax = truthy syntax
 
+--- Get the current argument
+--
+-- NOTE: This is an inefficient recreation of the GetArg function, as it is not
+-- exported to lua: https://github.com/zyedidia/micro/internal/buffer/autocomplete.go
+-- 
+-- @tparam userdata buffer object
+-- @return string
+-- @return number
+get_arg = =>
+  c = @GetActiveCursor!
+  args = str.Split util.String(@LineBytes c.Y), ' '
+  count = #args
+  current = args[count]
+  argstart = 0
+  
+  for i, a in iter_goarray args
+    break if i == count
+    argstart += util.CharacterCountInString(a) + 1
+
+  return args, current, argstart - 1
+  
 
 git = (->
   w_commit  = wordify 'commit', '', 's'
@@ -635,6 +664,15 @@ git = (->
 
     --- Return the revision hash for a given label, or false
     known_label = (label) ->
+      out = exec "for-each-ref", "--format=%(refname:short)",
+        "refs/heads",
+        "refs/remotes"
+        
+      each_line (out or ""), (line, _, _, final) ->
+        if label == line or str.HasSuffix(line, "/#{label}")
+          label = line
+          return final true
+    
       out, err = exec "rev-parse", "--quiet", "--verify", label
       unless (err and err != "") or (out and out != "")
         return false, err
@@ -967,7 +1005,8 @@ git = (->
         closed = true
         fn ...
 
-    commit_pane\SetActive!
+    tab = (commit_pane\Tab!)
+    tab\SetActive tab\GetPane commit_pane\ID!
 
     table.insert ACTIVE_COMMITS, {
       pane: commit_pane
@@ -977,9 +1016,102 @@ git = (->
       :callback
     }
 
+
+  --- Provide branch and tag label completion for a repo
+  branch_complete = (->
+    ref_data_fmt = "--format=%(refname:short);%(objectname:short)"
+    
+    return =>
+      root = app.CurPane!
+      return nil, nil unless root
+
+      _, dir, _, _ = get_path_info root.Buf.Path
+      
+      cmd = new_command dir
+      return nil, nil unless cmd
+      return nil, nil unless cmd.in_repo!
+
+      out = cmd.exec 'for-each-ref', ref_data_fmt,
+        "refs/heads",
+        "refs/remotes",
+        "refs/tags"
+      return nil, nil unless out
+
+      args, arg, place = get_arg self
+      branches = {}
+      suggestions = {}
+      completions = {}
+
+      -- Prevents duplicate branches from being added (which can happen, as we 
+      -- are checking both local and remote refs)
+      added = {}
+      each_line out, (line) ->
+        branch = line\match"^([^;]+);([^;]+)$"
+        return unless branch
+        branch = branch\gsub("^[^/]+/", "")
+        return if added[branch]
+        table.insert branches, branch
+        added[branch] = true
+      
+      c = @GetActiveCursor!
+
+      for _, branch in ipairs branches
+        if str.HasPrefix(branch, arg) and not (branch == arg)
+          table.insert suggestions, branch
+          table.insert completions, string.sub(branch, c.X - place)
+    
+      return completions, suggestions
+  )!
+
+
+  --- Provide file completion using a repo's top level directory
+  repo_complete = =>
+    root = app.CurPane!
+    c = @GetActiveCursor!
+
+    _, dir, _, _ = get_path_info root.Buf.Path
+    cmd, err = new_command dir
+    return nil, nil unless cmd
+    return nil, nil unless cmd.in_repo!
+
+    repo_root = cmd.top_level!
+    return nil, nil unless repo_root
+    
+    args, arg, place = get_arg self
+    dirs = str.Split arg, PATHSEP
+    dir_str = str.Join([d for d in *dirs[1,]], PATHSEP)
+    files = {}
+
+    local err
+    if #dirs > 1
+      _path = replace_home(dir_str .. PATHSEP)
+      unless str.HasPrefix(_path, PATHSEP)
+        _path = repo_root .. PATHSEP .. _path
+      files, err = ioutil.ReadDir _path
+      
+    else
+      files, err = ioutil.ReadDir repo_root
+
+    return nil, nil if err
+
+    suggestions = {}
+    completions = {}
+    
+    for _, f in iter_goarray files
+      name = f\Name!
+      name ..= PATHSEP if f\IsDir!
+      if str.HasPrefix name, dirs[#dirs]
+        table.insert suggestions, name
+        name = dir_str .. name if #dirs > 1
+        table.insert completions, string.sub(name, c.X - place)
+
+    return completions, suggestions
+
   return {
     :update_branch_status
     :update_git_diff_base
+    :branch_complete
+    :repo_complete
       
     init: (finfo) =>
       return send.init errors.need_file unless finfo
@@ -1040,7 +1172,7 @@ git = (->
 
       Options:
         -s --staged   Include staged files
-        -a --all       Diff entire repository
+        -a --all      Diff entire repository
     ]]
     
     fetch: (finfo) =>
@@ -1123,7 +1255,6 @@ git = (->
         List branches, and note the currently active branch
     ]]
 
-      
     status: (finfo) =>
       return send.status errors.need_file unless finfo
       return send.status errors.no_scratch if is_scratch @Buf
@@ -1395,7 +1526,7 @@ git = (->
 
         file, err = replace_home file
         return send.stage err if err
-        unless path_exists file
+        unless path_exists(file) or path_exists(cmd.top_level! .. PATHSEP .. file)
           return send.stage errors.invalid_arg .. ", file #{file} doesn't exist"
 
         table.insert files, file
@@ -1435,7 +1566,7 @@ git = (->
           
         file, err = replace_home file
         return send.unstage err if err
-        unless path_exists file
+        unless path_exists(file) or path_exists(cmd.top_level! .. PATHSEP .. file)
           return send.unstage errors.invalid_arg .. "(file #{file} doesn't exist)"
 
         table.insert files, file
@@ -1639,11 +1770,13 @@ export preinit = ->
 export init = ->
   debug "Initializing #{NAME}"
 
-  cmd = tostring cfg.GetGlobalOption "#{NAMES}.command"
+  cmd = tostring cfg.GetGlobalOption "#{NAME}.command"
   if cmd == ""
     cmd, _ = shl.ExecCommand "command", "-v", "git"
     if cmd == '' or not cmd
-      app.TermMessage "#{NAME}: git not present in $PATH or set, some functionality will not work correctly"
+      app.TermMessage "#{NAME}: git not present in $PATH or set, plugin will not work correctly"
+    else
+      cfg.SetGlobalOption "#{NAME}.command", chomp cmd
 
   add_command "init", git.init,
     callbacks: {
@@ -1652,12 +1785,14 @@ export init = ->
     }
     
   add_command "pull", git.pull,
+    completer: git.branch_complete
     callbacks: {
       git.update_branch_status
       git.update_git_diff_base
     }
     
   add_command "push", git.push,
+    completer: git.branch_complete
     callbacks: {
       git.update_branch_status
       git.update_git_diff_base
@@ -1670,33 +1805,35 @@ export init = ->
     }
     
   add_command "fetch", git.fetch,
+    completer: git.branch_complete
     callbacks: {
       git.update_branch_status
       git.update_git_diff_base
     }
 
   add_command "checkout", git.checkout,
+    completer: git.branch_complete
     callbacks: {
       git.update_branch_status
       git.update_git_diff_base
     }
 
-  add_command "stage", git.stage, 
-    completer: cfg.FileComplete
+  add_command "stage", git.stage,
+    completer: git.repo_complete
     callbacks: {
       git.update_branch_status
       git.update_git_diff_base
     }
 
   add_command "unstage", git.unstage,
-    completer: cfg.FileComplete
+    completer: git.repo_complete
     callbacks: {
       git.update_branch_status
       git.update_git_diff_base
     }
     
-  add_command "rm", git.rm, 
-    completer: cfg.FileComplete
+  add_command "rm", git.rm,
+    completer: git.repo_complete
     callbacks: {
       git.update_branch_status
       git.update_git_diff_base
