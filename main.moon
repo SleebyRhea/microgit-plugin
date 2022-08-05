@@ -1726,7 +1726,7 @@ export preinit = ->
   add_config "gitgutter", true, [[
     Enable or disable updating the diff gutter with git changes (type: boolean)
 
-    Note: To use this, ensure diffgutter is enabled
+    Note: To use this, ensure the diff plugin is installed and diffgutter enabled!
   ]]
 
   add_config "cleanstale", true, [[
