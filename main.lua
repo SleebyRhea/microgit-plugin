@@ -959,7 +959,10 @@ git = (function()
     if not (truthy(cfg.GetGlobalOption(tostring(NAME) .. ".gitgutter"))) then
       return 
     end
-    if not (self.Settings["diffgutter"] and finfo and (not self.Type.Scratch) and (self.Path ~= '')) then
+    if not (truthy(cfg.GetGlobalOption("diffgutter"))) then
+      return 
+    end
+    if not (finfo and (not self.Type.Scratch) and (self.Path ~= '')) then
       return 
     end
     if ACTIVE_UPDATES[finfo.abs] then

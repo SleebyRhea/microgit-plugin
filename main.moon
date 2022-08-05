@@ -930,7 +930,8 @@ git = (->
   -- @return none
   update_git_diff_base = (finfo, cmd) =>
     return unless truthy cfg.GetGlobalOption "#{NAME}.gitgutter"
-    return unless @Settings["diffgutter"] and finfo and (not @Type.Scratch) and (@Path != '')
+    return unless truthy cfg.GetGlobalOption "diffgutter"
+    return unless finfo and (not @Type.Scratch) and (@Path != '')
 
     return if ACTIVE_UPDATES[finfo.abs]
     ACTIVE_UPDATES[finfo.abs] = true

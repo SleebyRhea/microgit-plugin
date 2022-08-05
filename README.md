@@ -4,6 +4,27 @@ Git for Micro
 ## About
 Adds a number of commands to make working with git repos within Micro a more seamless experience. Additionally, adds statusline parameters to make showing branch information on your statusline easily configurable. Finally, improves on the diff plugins git change support.
 
+## Installation
+1. Navigate to your micro configuration plug directory:
+  ```
+  cd /path/to/micro/dir/plug
+  ```
+2. Clone the repo as `microgit`
+  ```
+  git clone https://github.com/SleepyFugu/microgit-plugin microgit
+  ```
+3. Make sure that the final name of the plugins directory is `microgit` or certain features will not work
+
+## Building
+- This project uses [moonscript](https://moonscript.org/), so if you're making changes you'll need to install that via [luarocks](https://luarocks.org/):
+  ```
+  luarocks install moonscript
+  ```
+- Following that, just run `moonc` in the plugin directory
+  ```
+  cd /path/to/microgit && moonc .
+  ```
+
 ## Options
 - `microgit.updateinfo (boolean)` 
   - Enable/Disable branch information tracking in Micro
