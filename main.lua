@@ -1,6 +1,6 @@
 VERSION = "1.0.0"
-NAME = 'microgit'
 DESC = 'Git for Micro'
+local NAME = _M._NAME
 local git
 local go = assert(loadstring([[  -- script: lua
   return ({
@@ -1850,6 +1850,16 @@ git = (function()
       for k, v in pairs(CALLBACKS_SET) do
         for cb, fn in pairs(CALLBACKS_SET[k]) do
           debug_output = debug_output .. "  " .. tostring(k) .. ": " .. tostring(fn) .. "\n"
+        end
+      end
+      debug_output = debug_output .. "_M: " .. tostring(_M or 'none') .. "\n"
+      debug_output = debug_output .. "_G\n"
+      for k, v in pairs(_G) do
+        debug_output = debug_output .. "  " .. tostring(k) .. ": " .. tostring(v) .. "\n"
+        if k == _M._NAME then
+          for k2, v2 in pairs(_G[k]) do
+            debug_output = debug_output .. "    " .. tostring(k2) .. ": " .. tostring(v2) .. "\n"
+          end
         end
       end
       return send.debug(debug_output)

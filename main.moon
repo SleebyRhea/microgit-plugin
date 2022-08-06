@@ -1,6 +1,7 @@
 export VERSION = "1.0.0"
-export NAME    = 'microgit'
 export DESC    = 'Git for Micro'
+
+NAME = _M._NAME
 
 local git
 
@@ -1667,6 +1668,14 @@ git = (->
       for k, v in pairs CALLBACKS_SET
         for cb, fn in pairs CALLBACKS_SET[k]
           debug_output ..= "  #{k}: #{fn}\n"
+
+      debug_output ..= "_M: #{_M or 'none'}\n"
+      debug_output ..= "_G\n"
+      for k, v in pairs _G
+        debug_output ..= "  #{k}: #{v}\n"
+        if k == _M._NAME
+          for k2, v2 in pairs _G[k]
+            debug_output ..= "    #{k2}: #{v2}\n"
 
       return send.debug debug_output
       

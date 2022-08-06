@@ -13,7 +13,6 @@ Adds a number of commands to make working with git repos within Micro a more sea
   ```
   git clone https://github.com/SleepyFugu/microgit-plugin microgit
   ```
-3. Make sure that the final name of the plugins directory is `microgit` or certain features will not work
 
 ## Building
 - This project uses [moonscript](https://moonscript.org/), so if you're making changes you'll need to install that via [luarocks](https://luarocks.org/):
@@ -36,7 +35,7 @@ Adds a number of commands to make working with git repos within Micro a more sea
   - To use properly, enable `diffgutter`
 
 ## Statusline
-NOTE: In order to use the statusline functions, you MUST make sure the plugin directory name is `microgit` or Micro will not register the plugin correctly.
+NOTE: Please note that the "microgit" within the following functions will correspond to what you have named the plugin within your plug directory.
 This plugin exposes the following functions for statusline configurations:
   - `microgit.numahead`
     - Returns the number of commits ahead of your branches origin
