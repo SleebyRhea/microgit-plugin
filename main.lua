@@ -151,6 +151,18 @@ iter_goarray = function(object)
     return i, object[i], len
   end
 end
+local reverse_goarray
+reverse_goarray = function(object)
+  local len = #object
+  local i = len + 1
+  return function()
+    i = i - 1
+    if i < 1 then
+      return 
+    end
+    return i, object[i], len
+  end
+end
 local get_path_info = (function()
   local s = string.char(os.PathSeparator)
   local insert = table.insert
@@ -184,7 +196,7 @@ local get_path_info = (function()
     end
     local skip = 0
     local canon_split = { }
-    for i, ent, len in iter_goarray(re_part:FindAllString(work_string, -1)) do
+    for i, ent, len in reverse_goarray(re_part:FindAllString(work_string, -1)) do
       local _continue_0 = false
       repeat
         local _exp_0 = true
@@ -202,7 +214,7 @@ local get_path_info = (function()
         elseif (skip > len - i) == _exp_0 then
           return nil, "get_path_info: " .. tostring(work_string) .. " invalid path, too many parent traversals"
         end
-        insert(canon_split, ent)
+        insert(canon_split, 1, ent)
         _continue_0 = true
       until true
       if not _continue_0 then
@@ -969,7 +981,6 @@ git = (function()
       return 
     end
     ACTIVE_UPDATES[finfo.abs] = true
-    debug("update_branch_status: Beginning update process for " .. tostring(self))
     if not (cmd) then
       local err
       cmd, err = new_command(finfo.dir)
@@ -983,28 +994,32 @@ git = (function()
     local repo_relative_path = ''
     local top_level = ''
     local diff_base = ''
-    local start_set_diffbase
-    start_set_diffbase = function()
+    local parse_top_level, start_chain, finish_chain
+    start_chain = function()
+      debug("update_git_diff_base: Starting git diff chain")
+      return cmd.exec_async_cb("rev-parse", nil, (function(out)
+        top_level = top_level .. out
+      end), (function(out)
+        top_level = top_level .. out
+      end), parse_top_level, "--show-toplevel")
+    end
+    parse_top_level = function()
+      repo_relative_path = str.TrimPrefix(finfo.abs, chomp(top_level))
+      debug("update_git_diff_base: Got repo_relative: " .. tostring(repo_relative_path) .. " for " .. tostring(finfo.abs))
+      return cmd.exec_async_cb("show", nil, (function(out)
+        diff_base = diff_base .. out
+      end), (function(out)
+        diff_base = diff_base .. out
+      end), finish_chain, ":./" .. tostring(repo_relative_path))
+    end
+    finish_chain = function()
       if not (diff_base and diff_base ~= '') then
         diff_base = self:Bytes()
       end
       self:SetDiffBase(diff_base)
       ACTIVE_UPDATES[finfo.abs] = false
     end
-    local start_get_diffbase
-    start_get_diffbase = function()
-      repo_relative_path = str.TrimPrefix(finfo.abs, chomp(top_level))
-      return cmd.exec_async_cb("show", nil, (function(out)
-        diff_base = diff_base .. out
-      end), (function(out)
-        diff_base = diff_base .. out
-      end), start_set_diffbase, ":./" .. tostring(repo_relative_path))
-    end
-    return cmd.exec_async_cb("rev-parse", nil, (function(out)
-      top_level = top_level .. out
-    end), (function(out)
-      top_level = top_level .. out
-    end), start_get_diffbase, "--show-toplevel")
+    return start_chain()
   end
   local make_commit_pane
   make_commit_pane = function(root, cmd, output, fn)

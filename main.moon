@@ -151,6 +151,19 @@ iter_goarray = (object) ->
     return i, object[i], len
 
 
+--- Iterate over a golang array
+--
+-- @tparam userdata golang array
+-- @return function iterator function
+reverse_goarray = (object) ->
+  len = #object
+  i = len + 1
+  return ->
+    i -= 1
+    return if i < 1
+    return i, object[i], len
+    
+
 --- Process a filepath and return information regarding it
 --
 -- @tparam string filepath to process 
@@ -198,7 +211,7 @@ get_path_info = (->
 
     skip = 0
     canon_split = {}
-    for i, ent, len in iter_goarray re_part\FindAllString work_string, -1
+    for i, ent, len in reverse_goarray re_part\FindAllString work_string, -1
       switch true
         when ent == "."
           continue
@@ -211,7 +224,7 @@ get_path_info = (->
         when skip > len - i
           return nil, "get_path_info: #{work_string} invalid path, too many parent traversals"
 
-      insert canon_split, ent
+      insert canon_split, 1, ent
 
     absolute = str.Join canon_split, s
     unless windows and (absolute\sub 1, 1) == s
@@ -937,7 +950,6 @@ git = (->
     return if ACTIVE_UPDATES[finfo.abs]
     ACTIVE_UPDATES[finfo.abs] = true
 
-    debug "update_branch_status: Beginning update process for #{self}"
     unless cmd
       cmd, err = new_command finfo.dir
       return send.diffupdate "#{err}#{suppress}" unless cmd  
@@ -947,24 +959,31 @@ git = (->
     top_level = ''
     diff_base = ''
 
-    start_set_diffbase = ->
+    local parse_top_level, start_chain, finish_chain
+    
+    start_chain = ->
+      debug "update_git_diff_base: Starting git diff chain"
+      cmd.exec_async_cb "rev-parse", nil,
+        ((out) -> top_level ..= out),
+        ((out) -> top_level ..= out),
+        parse_top_level,
+        "--show-toplevel"
+    
+    parse_top_level = ->
+      repo_relative_path = str.TrimPrefix finfo.abs, chomp(top_level)
+      debug "update_git_diff_base: Got repo_relative: #{repo_relative_path} for #{finfo.abs}"
+      cmd.exec_async_cb "show", nil,
+        ((out) -> diff_base ..= out),
+        ((out) -> diff_base ..= out),
+        finish_chain,
+        ":./#{repo_relative_path}"
+
+    finish_chain = ->
       diff_base = @Bytes! unless diff_base and diff_base != ''
       @SetDiffBase diff_base
       ACTIVE_UPDATES[finfo.abs] = false
 
-    start_get_diffbase = ->
-      repo_relative_path = str.TrimPrefix finfo.abs, chomp(top_level)
-      cmd.exec_async_cb "show", nil,
-        ((out) -> diff_base ..= out),
-        ((out) -> diff_base ..= out),
-        start_set_diffbase,
-        ":./#{repo_relative_path}"
-
-    cmd.exec_async_cb "rev-parse", nil,
-      ((out) -> top_level ..= out),
-      ((out) -> top_level ..= out),
-      start_get_diffbase,
-      "--show-toplevel"  
+    start_chain!
 
   --- Create a new pane with the contents of output.
   -- 
