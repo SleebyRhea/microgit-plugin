@@ -1,0 +1,4 @@
+[*.lua]
+indent_style = space
+indent_size = 2
+space_before_inline_comment = 1
